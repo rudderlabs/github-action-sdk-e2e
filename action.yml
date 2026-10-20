@@ -1,0 +1,34 @@
+name: RudderStack SDK E2E
+description: Dispatch the central SDK validation workflow and wait for its exact result.
+
+inputs:
+  token:
+    description: GitHub App token with Actions write access to rudderlabs/rudder-sdk-e2e-tests.
+    required: true
+  suite:
+    description: reliability runs local delivery checks; full also runs live pipeline checks.
+    default: reliability
+  timeout-seconds:
+    description: Maximum wait for central validation, from 1 to 3000 seconds.
+    default: '3000'
+
+outputs:
+  run-id:
+    description: The exact dispatched workflow run ID.
+    value: ${{ steps.dispatch.outputs.run-id }}
+  run-url:
+    description: Link to the exact dispatched workflow run.
+    value: ${{ steps.dispatch.outputs.run-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Dispatch SDK validation and wait
+      id: dispatch
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.token }}
+        SDK_E2E_SUITE: ${{ inputs.suite }}
+        SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+      run: python3 "$ACTION_PATH/scripts/dispatch.py"
