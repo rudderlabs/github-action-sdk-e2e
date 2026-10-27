@@ -45,8 +45,8 @@ jobs:
         id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.E2E_APP_CLIENT_ID }}
-          private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}
           owner: rudderlabs
           repositories: rudder-sdk-e2e-tests
           permission-actions: write
@@ -58,9 +58,17 @@ jobs:
           suite: reliability
 ```
 
-Configure the dedicated App before running the workflow. Install it on the
-central test repository with Actions write permission. The caller repository's
-ordinary `GITHUB_TOKEN` cannot dispatch into that internal repository.
+Reuse the existing release App credentials already available to the SDK workflow.
+Verify that its installation includes the central test repository and grants
+Actions write permission. Scope the generated token to that repository and
+permission, as shown above. A separate E2E App or private key is not required.
+
+Use the identifier configured by the repository's release workflow. Node uses
+`client-id: vars.RELEASE_APP_CLIENT_ID`; Go currently uses the supported legacy
+`app-id: vars.RELEASE_APP_ID` input. The Client ID and numeric App ID are distinct.
+Keep the private key in GitHub Secrets and pass only the generated token to this
+action. The caller's ordinary `GITHUB_TOKEN` cannot dispatch into the internal
+test repository.
 The workflow also supports release events; the action uses the event's commit SHA.
 
 ## Interface
