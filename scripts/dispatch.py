@@ -45,6 +45,14 @@ def inputs(environment):
     correlation = f"{repository.split('/')[1]}-{run_id}-{attempt}-{sha}"
     selected = {"selection": "auto", "source_repository": repository, "source_sha": sha,
                 "suite": suite, "request_id": correlation}
+    version = environment.get("SDK_E2E_PACKAGE_VERSION", "")
+    if version:
+        if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+            raise ValueError("package-version must be an exact stable version (X.Y.Z or vX.Y.Z)")
+        if environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request"):
+            raise ValueError("published-package validation cannot originate from a pull request")
+        selected["package_version"] = version
+        selected["request_id"] += f"-published-{version}"
     if environment.get("GITHUB_EVENT_NAME") == "pull_request":
         match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
         if not match:
@@ -82,6 +90,8 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
+            if selected.get("package_version"):
+                summary.write(f"\nMode: published package `{selected['package_version']}`\n")
     while time.monotonic() - started < timeout:
         run = request(f"/actions/runs/{run_id}", token)
         verified = validate_run(run, run_id, selected["request_id"],

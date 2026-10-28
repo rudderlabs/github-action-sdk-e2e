@@ -8,6 +8,9 @@ inputs:
   suite:
     description: reliability runs local delivery checks; full also runs live pipeline checks.
     default: reliability
+  package-version:
+    description: Exact published package version (X.Y.Z or vX.Y.Z); empty tests the event's source candidate.
+    default: ''
   timeout-seconds:
     description: Maximum wait for central validation, from 1 to 3000 seconds.
     default: '3000'
@@ -30,5 +33,6 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.token }}
         SDK_E2E_SUITE: ${{ inputs.suite }}
+        SDK_E2E_PACKAGE_VERSION: ${{ inputs.package-version }}
         SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
       run: python3 "$ACTION_PATH/scripts/dispatch.py"
