@@ -19,6 +19,12 @@ outputs:
   run-url:
     description: Link to the exact dispatched workflow run.
     value: ${{ steps.dispatch.outputs.run-url }}
+  report:
+    description: Verified Go candidate report JSON (schema v1); only for successful full non-PR Go runs.
+    value: ${{ steps.dispatch.outputs.report }}
+  validated-sha:
+    description: Go candidate commit SHA from the verified full non-PR report; empty otherwise.
+    value: ${{ steps.dispatch.outputs.validated-sha }}
 
 runs:
   using: composite

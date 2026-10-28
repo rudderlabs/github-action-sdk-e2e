@@ -38,7 +38,7 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
        github.actor != 'dependabot[bot]' &&
        github.event.pull_request.user.login != 'dependabot[bot]')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
       - name: Harden the runner
@@ -53,7 +53,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}
           owner: rudderlabs
           repositories: rudder-sdk-e2e-tests
-          permission-actions: write
+          permission-actions: write # Includes read access to run artifacts.
       - name: Run SDK E2E
         id: e2e
         uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
@@ -94,6 +94,8 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | --- | --- |
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
+| `report` | Single-line JSON with verified full, non-PR Go candidate evidence; empty for PR reliability and other callers. |
+| `validated-sha` | Go commit SHA copied from the verified report; empty for PR reliability and other callers. |
 
 The action derives the source repository and SHA from the caller's GitHub event.
 For `pull_request`, it also sends the PR number from `refs/pull/<number>/merge`.
@@ -116,6 +118,66 @@ Only a `success` conclusion passes. Failed, cancelled, skipped, mismatched, or
 timed-out runs fail the action. API errors and missing run IDs also fail.
 The action does not retry the dispatch POST because that could start duplicate
 runs. Once dispatched, the run URL remains available even if validation fails.
+
+### Go candidate evidence (schema v1)
+
+For a full, non-PR Go candidate, the central adapter uploads exactly one artifact
+named `go-release-result-<central run ID>-<attempt>`, containing only
+`release-result.json`, before its run concludes successfully. PR reliability
+runs do not emit release evidence and pass only on the exact central run's
+successful conclusion. The full-run JSON object has these required fields:
+
+```json
+{
+  "schema_version": 1,
+  "request_id": "analytics-go-42-2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "repository": "rudderlabs/analytics-go",
+  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "module": "github.com/rudderlabs/analytics-go/v4",
+  "version": "4.2.0",
+  "central_run_id": 123,
+  "central_run_attempt": 1,
+  "delivery_passed": true,
+  "restoration_verified": true,
+  "lock_released": true
+}
+```
+
+The central adapter derives module and version from the installed Go
+candidate, and verifies live delivery, restoration, infrastructure cleanup,
+and lock release before setting the three boolean results to `true`.
+`central_run_attempt` is the central workflow attempt, distinct from the caller
+attempt encoded in `request_id`.
+The action lists artifacts **only for the returned successful run ID**, rejects
+incomplete listings, and downloads the unique non-expired artifact by ID with
+the existing central-repository App token (Actions write, including artifact
+read). It verifies the GitHub artifact record's `sha256:` archive digest,
+limits the download and JSON size, and checks every identity and result field
+before exporting `report` and `validated-sha`. The signed download redirect
+never receives the App token. No artifact URL or SHA is accepted from a caller;
+a missing or mismatched report fails full non-PR Go validation. This digest
+binds bytes to the GitHub artifact record, not to an independent attestation
+of the tests. PR reliability and other SDK callers retain exact-run success
+validation but have no Go report.
+
+For Go publication, dispatch `suite: full`, require a nonempty verified
+`report`, parse it as JSON (never as shell code), and compare its `commit`,
+`source_tree`, `module`, and `version` to the proposed tag target **immediately
+before creating a tag**.
+Recheck the default-branch head at that boundary: a passing result for commit
+A must never tag commit B. Run the full candidate check as a dependency of
+publication, not an independent push workflow. Keep release PR generation
+independent of this gate and keep post-publication registry-package validation
+and notification as separate acceptance (including the exact registry-package
+checks in analytics-go#91). A validation-only retry must not create tags or
+upload a release. Roll out a stable aggregate required check in the Go caller:
+run it even when a fork or Dependabot PR skips the privileged dispatch job;
+make its policy explicit, and verify the repository rule configuration in a
+separate reviewable step before claiming enforcement. This action does not
+change repository rules. Do not rely on this output until the central
+adapter report contract has been deployed and the caller pins the reviewed
+commit of this action.
 
 Timeout or cancellation of the caller does not cancel the central run. A live
 run may need to restore its pipeline. Inspect the linked run before retrying.
