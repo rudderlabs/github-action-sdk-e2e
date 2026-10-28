@@ -32,8 +32,12 @@ permissions:
 
 jobs:
   validate:
-    # Fork pull requests cannot access the dispatch App secret.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Fork and Dependabot PRs cannot access the release App secret.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]' &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
@@ -45,8 +49,8 @@ jobs:
         id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.E2E_APP_CLIENT_ID }}
-          private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}
           owner: rudderlabs
           repositories: rudder-sdk-e2e-tests
           permission-actions: write
@@ -55,13 +59,28 @@ jobs:
         uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
         with:
           token: ${{ steps.token.outputs.token }}
-          suite: reliability
+          suite: ${{ github.event_name == 'pull_request' && 'reliability' || vars.SDK_E2E_SUITE || 'reliability' }}
 ```
 
-Configure the dedicated App before running the workflow. Install it on the
-central test repository with Actions write permission. The caller repository's
-ordinary `GITHUB_TOKEN` cannot dispatch into that internal repository.
+Reuse the existing release App credentials already available to the SDK workflow.
+Verify that its installation includes the central test repository and grants
+Actions write permission. Scope the generated token to that repository and
+permission, as shown above. A separate E2E App or private key is not required.
+
+Use the identifier configured by the repository's release workflow. Node uses
+`client-id: vars.RELEASE_APP_CLIENT_ID`; Go currently uses the supported legacy
+`app-id: vars.RELEASE_APP_ID` input. The Client ID and numeric App ID are distinct.
+Keep the private key in GitHub Secrets and pass only the generated token to this
+action. The caller's ordinary `GITHUB_TOKEN` cannot dispatch into the internal
+test repository.
 The workflow also supports release events; the action uses the event's commit SHA.
+
+Keep `SDK_E2E_SUITE` unset or set to `reliability` until live delivery and cleanup
+acceptance are complete. Then set it to `full` for automatic default-branch and
+release validation. The expression above keeps PR candidates on `reliability`.
+Full candidate validation requires a commit in the SDK's default-branch history.
+Fork and Dependabot PRs skip this privileged caller; merged changes still run on
+the default-branch push. Do not copy the release App key into Dependabot secrets.
 
 ## Interface
 
