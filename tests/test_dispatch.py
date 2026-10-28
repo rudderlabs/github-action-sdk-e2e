@@ -135,8 +135,38 @@ class DispatchTests(unittest.TestCase):
         for field, value in (("id", 124), ("repository", {"full_name": "other/repo"}),
                              ("event", "push"), ("head_branch", "other"), ("path", "other.yml"),
                              ("display_title", "sdk-e2e another-request")):
-            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "identity"):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "does not match"):
                 self.wait([{"workflow_run_id": 123}, dict(self.run, **{field: value})])
+
+    def test_waits_for_github_to_expand_the_initial_workflow_title(self):
+        pending = dict(self.run, status="queued", conclusion=None,
+                       display_title="Server SDK validation")
+        url, request = self.wait([{"workflow_run_id": 123}, pending,
+                                  dict(self.run, status="in_progress", conclusion=None), self.run])
+        self.assertTrue(url.endswith("/123"))
+        self.assertEqual(request.call_count, 4)
+
+    def test_pending_title_still_requires_all_other_identity_fields(self):
+        pending = dict(self.run, status="queued", conclusion=None,
+                       display_title="Server SDK validation")
+        for field, value in (("id", 124), ("repository", {"full_name": "other/repo"}),
+                             ("event", "push"), ("head_branch", "other"), ("path", "other.yml")):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "identity"):
+                self.wait([{"workflow_run_id": 123}, dict(pending, **{field: value})])
+
+    def test_completed_or_unrelated_titles_never_pass(self):
+        for status, title in (("completed", "Server SDK validation"),
+                              ("queued", "sdk-e2e another-request"), ("queued", "")):
+            with self.subTest(status=status, title=title), \
+                    self.assertRaisesRegex(RuntimeError, "request title"):
+                self.wait([{"workflow_run_id": 123}, dict(self.run, status=status, display_title=title)])
+
+    def test_pending_title_has_a_thirty_second_limit(self):
+        pending = dict(self.run, status="queued", conclusion=None,
+                       display_title="Server SDK validation")
+        with patch.object(dispatch.time, "monotonic", side_effect=[0, 0, 30]), \
+                self.assertRaisesRegex(RuntimeError, "request title"):
+            self.wait([{"workflow_run_id": 123}, pending])
 
     def test_deadline_fails_and_keeps_run_url(self):
         with self.assertRaisesRegex(RuntimeError, "timed out"):
