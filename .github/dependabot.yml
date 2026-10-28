@@ -4,3 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+      exclude:
+        - "rudderlabs/*"
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      actions:
+        patterns:
+          - "*"

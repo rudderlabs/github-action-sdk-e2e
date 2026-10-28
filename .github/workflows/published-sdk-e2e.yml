@@ -1,0 +1,157 @@
+name: Validate published server SDK
+
+on:
+  workflow_call:
+    inputs:
+      package-version:
+        description: Exact stable version published by the SDK (X.Y.Z or vX.Y.Z).
+        required: true
+        type: string
+      release-app-client-id:
+        description: Release App Client ID (all callers except Go).
+        type: string
+      release-app-id:
+        description: Existing numeric release App ID (Go only).
+        type: string
+    secrets:
+      RELEASE_PRIVATE_KEY:
+        required: true
+    outputs:
+      run-id:
+        description: Exact central validation run ID (also logged on failure).
+        value: ${{ jobs.validate.outputs.run-id }}
+      run-url:
+        description: Exact central validation run URL (also logged on failure).
+        value: ${{ jobs.validate.outputs.run-url }}
+
+permissions: {}
+
+# Every attempt is independent. In particular, a retry must never cancel a live run.
+concurrency:
+  group: published-sdk-e2e-${{ github.repository }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read # Preflight reads the caller's release and tag, without an App token.
+    outputs:
+      run-id: ${{ steps.e2e.outputs.run-id }}
+      run-url: ${{ steps.e2e.outputs.run-url }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - name: Verify published release and inherited caller identity
+        id: preflight
+        env:
+          PACKAGE_VERSION: ${{ inputs.package-version }}
+          CALLER_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from urllib.request import Request, urlopen
+
+          REPOSITORIES = {
+              'rudderlabs/analytics-go', 'rudderlabs/rudder-sdk-node',
+              'rudderlabs/rudder-sdk-python', 'rudderlabs/rudder-sdk-ruby',
+              'rudderlabs/rudder-sdk-ruby-sync', 'rudderlabs/rudder-php-sdk',
+              'rudderlabs/rudder-sdk-java', 'rudderlabs/rudder-sdk-.net',
+              'rudderlabs/rudder-sdk-rust',
+          }
+
+          def api(repository, path):
+              request = Request(f'https://api.github.com/repos/{repository}/{path}', headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {os.environ["CALLER_TOKEN"]}',
+                  'X-GitHub-Api-Version': '2026-03-10',
+              })
+              with urlopen(request, timeout=20) as response:
+                  return json.load(response)
+
+          def validate():
+              repository = os.environ['GITHUB_REPOSITORY']
+              sha = os.environ['GITHUB_SHA']
+              event_name = os.environ['GITHUB_EVENT_NAME']
+              ref = os.environ['GITHUB_REF']
+              version = os.environ['PACKAGE_VERSION']
+              if repository not in REPOSITORIES or not re.fullmatch(r'[0-9a-f]{40}', sha):
+                  raise ValueError('caller repository or commit is not an approved SDK release')
+              if event_name not in ('release', 'workflow_dispatch'):
+                  raise ValueError('published validation requires a release or manual tag retry')
+              if not re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+                  raise ValueError('package-version must be an exact stable version')
+              version = version.removeprefix('v')
+              tag = f'v{version}'
+              if ref != f'refs/tags/{tag}':
+                  raise ValueError('release tag and package-version do not match')
+              if event_name == 'release':
+                  with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as source:
+                      event = json.load(source)
+                  if (event.get('action') != 'published' or event.get('release', {}).get('tag_name') != tag
+                          or event['release'].get('draft') is not False
+                          or event['release'].get('prerelease') is not False):
+                      raise ValueError('only a published stable release at the selected tag is accepted')
+              release = api(repository, f'releases/tags/{tag}')
+              if (release.get('tag_name') != tag or release.get('draft') is not False
+                      or release.get('prerelease') is not False or not release.get('published_at')):
+                  raise ValueError('selected tag is not a published stable release')
+              if event_name == 'release' and event['release'].get('id') != release.get('id'):
+                  raise ValueError('release event no longer matches the published release')
+              reference = api(repository, f'git/ref/tags/{tag}')['object']
+              # GitHub returns a tag object for annotated tags; lightweight tags point to the commit.
+              if reference.get('type') == 'tag':
+                  reference = api(repository, f'git/tags/{reference["sha"]}')['object']
+              if reference.get('type') != 'commit' or reference.get('sha') != sha:
+                  raise ValueError('release tag no longer identifies the caller commit')
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                  output.write(f'version={version}\n')
+
+          try:
+              validate()
+          except (ValueError, KeyError, OSError):
+              # Do not log API response bodies, request headers, or the caller token.
+              print('Published SDK preflight failed: event, release, tag, or caller identity invalid', file=sys.stderr)
+              sys.exit(1)
+          PY
+      - name: Require exactly one release App identifier
+        env:
+          CLIENT_ID: ${{ inputs.release-app-client-id }}
+          APP_ID: ${{ inputs.release-app-id }}
+        run: |
+          if [[ "$GITHUB_REPOSITORY" == rudderlabs/analytics-go ]]; then
+            if [[ -z "$APP_ID" || -n "$CLIENT_ID" ]]; then
+              echo 'Go requires release-app-id only.' >&2
+              exit 1
+            fi
+          elif [[ -z "$CLIENT_ID" || -n "$APP_ID" ]]; then
+            echo 'Supply release-app-client-id only for this SDK.' >&2
+            exit 1
+          fi
+      - name: Create a central validation token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.release-app-client-id }}
+          app-id: ${{ inputs.release-app-id }}
+          private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}
+          owner: rudderlabs
+          repositories: rudder-sdk-e2e-tests
+          permission-actions: write
+          # The default post-job cleanup revokes the token (skip-token-revoke: false).
+      - name: Validate exact public package, delivery, and cleanup
+        id: e2e
+        # SDK-5962 adds package-version; do not use ./ (that resolves in the SDK caller).
+        uses: rudderlabs/github-action-sdk-e2e@855d3e174e917aab71b93a862c7e74592904d10e # SDK-5962 PR #5
+        with:
+          token: ${{ steps.token.outputs.token }}
+          package-version: ${{ steps.preflight.outputs.version }}
+          suite: full
+          timeout-seconds: '3000'

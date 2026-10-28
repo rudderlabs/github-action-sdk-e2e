@@ -82,6 +82,72 @@ Full candidate validation requires a commit in the SDK's default-branch history.
 Fork and Dependabot PRs skip this privileged caller; merged changes still run on
 the default-branch push. Do not copy the release App key into Dependabot secrets.
 
+## Published package validation
+
+The reusable workflow `.github/workflows/published-sdk-e2e.yml` validates the
+**published package**, not a source candidate. After the SDK's native publisher
+has completed successfully, call the workflow on the `release: published` event.
+For a validation-only retry of an existing published version, use
+`workflow_dispatch` on its release tag; do not republish or dispatch the central
+suite from a PR or branch. The caller must pass its exact stable package version
+(`X.Y.Z` or `vX.Y.Z`). Both input spellings require the canonical `vX.Y.Z`
+release tag; the central published-package validator verifies that tag.
+Bare release tags, prereleases, and drafts are rejected.
+
+Pin the **reusable workflow** to a reviewed full commit SHA when it is merged;
+do not use `./.github/workflows/...` across repositories. The caller job must
+allow `contents: read` (the preflight reads the caller's release and tag), pass
+the existing release App secret explicitly, and use exactly one release App
+identifier. Go uses `vars.RELEASE_APP_ID`; the other eight callers use
+`vars.RELEASE_APP_CLIENT_ID`. For example, in an SDK publisher workflow:
+
+```yaml
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      package-version:
+        description: Existing published stable version to revalidate
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  published-e2e:
+    # Keep the SDK's existing publish job and its dependency ordering intact.
+    # For manual retries select the existing release tag in GitHub's Run workflow UI.
+    permissions:
+      contents: read
+    uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA
+    with:
+      package-version: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.package-version }}
+      release-app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    secrets:
+      RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+```
+
+For Go, replace `release-app-client-id` with `release-app-id: ${{ vars.RELEASE_APP_ID }}`.
+Adapt the trigger and `needs:` to each SDK's native publisher: the public package
+must exist before validation. Do not run this workflow for release candidates or
+fork PRs. The preflight, before any App token is created, checks the approved SDK
+repository, inherited ref and SHA, the published release, and the tag's commit
+(including annotated tags) using the caller's read-only token. The generated App
+token is limited to Actions write on `rudder-sdk-e2e-tests` and is revoked at
+job completion. The workflow runs the full suite and exposes `run-id` and
+`run-url` outputs on success. On failure, use the central run URL in the logs or
+job summary; failed reusable jobs may not deliver outputs. A retry never cancels
+a previous central run; inspect that run and its cleanup before retrying.
+
+The composite action above remains the entry point for source candidates. Its
+published `package-version` input comes from shared action PR #5; the central
+published adapters and version selection come from central PR #32. This reusable
+workflow requires both reviewed and available commits, as well as hosted
+acceptance of live delivery and cleanup, before the nine SDK caller workflows
+are migrated. The SHA shown in the reusable workflow is the shared action PR #5
+head and must be reviewed before adoption. No SDK callers are changed here.
+
 ## Interface
 
 | Input | Default | Purpose |
