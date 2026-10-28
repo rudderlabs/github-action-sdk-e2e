@@ -40,6 +40,68 @@ class InputTests(unittest.TestCase):
         self.assertEqual(selected["source_sha"], SHA)
         self.assertEqual(selected["suite"], "full")
 
+    def test_explicit_pr_from_trusted_non_pr_event_uses_merge_sha_not_event_sha(self):
+        merge_sha = "b" * 40
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                        SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA=merge_sha))
+        self.assertEqual(selected["selection"], "auto")
+        self.assertEqual(selected["source_repository"], ENVIRONMENT["GITHUB_REPOSITORY"])
+        self.assertEqual(selected["source_pr"], "87")
+        self.assertEqual(selected["source_sha"], merge_sha)
+        self.assertEqual(selected["request_id"], f"analytics-go-42-2-{merge_sha}")
+        self.assertNotEqual(selected["source_sha"], ENVIRONMENT["GITHUB_SHA"])
+
+    def test_explicit_pr_matching_pull_request_event_is_allowed(self):
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request",
+                                        GITHUB_REF="refs/pull/87/merge", SDK_E2E_PR_NUMBER="87",
+                                        SDK_E2E_MERGE_SHA=SHA))
+        self.assertEqual(selected["source_pr"], "87")
+        self.assertEqual(selected["source_sha"], SHA)
+
+    def test_partial_or_malformed_explicit_candidate_is_rejected(self):
+        for pr, sha in (("87", ""), ("", SHA), ("0", SHA), ("-87", SHA),
+                        ("087", SHA), ("87\n", SHA), ("87", "not-a-sha"),
+                        ("87", "B" * 40), ("87", SHA + "\n")):
+            with self.subTest(pr=pr, sha=sha), self.assertRaises(ValueError):
+                dispatch.inputs(dict(ENVIRONMENT, SDK_E2E_PR_NUMBER=pr, SDK_E2E_MERGE_SHA=sha))
+
+    def test_explicit_pr_rejects_conflicting_pull_request_context(self):
+        for pr, sha, ref in (("88", SHA, "refs/pull/87/merge"),
+                             ("87", "b" * 40, "refs/pull/87/merge"),
+                             ("87", SHA, "refs/heads/master")):
+            with self.subTest(pr=pr, sha=sha, ref=ref), self.assertRaises(ValueError):
+                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request",
+                                     GITHUB_REF=ref, SDK_E2E_PR_NUMBER=pr, SDK_E2E_MERGE_SHA=sha))
+
+    def test_explicit_pr_rejects_conflicting_pull_request_target_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            event_path = Path(temporary) / "event.json"
+            environment = dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request_target",
+                               GITHUB_REF="refs/heads/master", GITHUB_EVENT_PATH=str(event_path),
+                               SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40)
+            event_path.write_text(json.dumps({"number": 87}))
+            selected = dispatch.inputs(environment)
+            self.assertEqual(selected["source_pr"], "87")
+            self.assertEqual(selected["source_sha"], "b" * 40)
+            for payload in ({"number": 88}, {"number": "87"}, {"number": True}, {}, []):
+                with self.subTest(payload=payload):
+                    event_path.write_text(json.dumps(payload))
+                    with self.assertRaisesRegex(ValueError, "conflicts with the pull_request_target"):
+                        dispatch.inputs(environment)
+            event_path.write_text("not JSON")
+            with self.assertRaises(ValueError):
+                dispatch.inputs(environment)
+            with self.assertRaisesRegex(ValueError, "requires an event payload"):
+                dispatch.inputs(dict(environment, GITHUB_EVENT_PATH=""))
+
+    def test_explicit_candidate_does_not_trust_bot_identity_or_branch(self):
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                        GITHUB_ACTOR="release-please[bot]",
+                                        GITHUB_REF="refs/heads/release-please--branches--master",
+                                        SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40))
+        self.assertEqual(selected["selection"], "auto")
+        self.assertEqual(selected["source_pr"], "87")
+
     def test_new_sdk_repository_does_not_require_an_action_allowlist_update(self):
         selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-python"))
         self.assertEqual(selected["selection"], "auto")
@@ -64,43 +126,53 @@ class InputTests(unittest.TestCase):
         second = dispatch.inputs(dict(ENVIRONMENT, GITHUB_RUN_ATTEMPT="3"))
         self.assertNotEqual(first["request_id"], second["request_id"])
 
-    def test_published_node_uses_release_sha_not_manual_event_sha(self):
-        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
-                                        GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
-                                        SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))
-        self.assertEqual(selected, {"selection": "auto", "source_repository": "rudderlabs/rudder-sdk-node",
-                                    "source_sha": RELEASE_SHA, "package_version": "3.0.17", "suite": "full",
-                                    "request_id": f"rudder-sdk-node-42-2-{RELEASE_SHA}-npm-3.0.17"})
-        self.assertNotEqual(selected["source_sha"], ENVIRONMENT["GITHUB_SHA"])
-        self.assertEqual(selected["source_sha"], dispatch.inputs(dict(
-            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node", GITHUB_EVENT_NAME="release",
-            SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["source_sha"])
-        candidate = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node"))
-        self.assertNotIn("package_version", candidate)
-        self.assertNotEqual(candidate["request_id"], selected["request_id"])
-        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
-            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node", GITHUB_RUN_ATTEMPT="3",
-            SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["request_id"])
-        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
-            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
-            SDK_E2E_PACKAGE_VERSION="3.0.18", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["request_id"])
+    def test_published_version_uses_event_sha_for_all_sdk_callers(self):
+        repositories = ("rudder-sdk-ruby", "rudder-sdk-ruby-sync", "rudder-sdk-php",
+                        "rudder-sdk-rust", "analytics-go", "rudder-sdk-dotnet",
+                        "rudder-sdk-java", "rudder-sdk-node", "rudder-sdk-python")
+        for name in repositories:
+            with self.subTest(repository=name):
+                selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY=f"rudderlabs/{name}",
+                                                GITHUB_EVENT_NAME="release", SDK_E2E_SUITE="full",
+                                                SDK_E2E_PACKAGE_VERSION="3.0.17"))
+                self.assertEqual(selected["source_sha"], SHA)
+                self.assertEqual(selected["package_version"], "3.0.17")
+                self.assertEqual(selected["suite"], "full")
+                self.assertNotIn("source_pr", selected)
+                self.assertEqual(selected["request_id"], f"{name}-42-2-{SHA}-package-3.0.17")
 
-    def test_published_input_validation_fails_closed_before_dispatch(self):
-        valid = dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
-                     GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_PACKAGE_VERSION="3.0.17",
-                     SDK_E2E_SOURCE_SHA=RELEASE_SHA, GH_TOKEN="test-token")
-        invalid = [
-            ({"SDK_E2E_SOURCE_SHA": ""}, "source-sha"),
+    def test_published_retry_override_uses_release_sha_and_distinct_identity(self):
+        environment = dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                           SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA)
+        selected = dispatch.inputs(environment)
+        self.assertEqual(selected["source_sha"], RELEASE_SHA)
+        self.assertNotEqual(selected["source_sha"], SHA)
+        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
+            environment, SDK_E2E_PACKAGE_VERSION="3.0.18"))["request_id"])
+        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
+            environment, GITHUB_RUN_ATTEMPT="3"))["request_id"])
+        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
+            ENVIRONMENT, GITHUB_SHA=RELEASE_SHA))["request_id"])
+
+    def test_invalid_published_requests_fail_before_dispatch(self):
+        valid = dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
+                     SDK_E2E_PACKAGE_VERSION="3.0.17", GH_TOKEN="test-token")
+        cases = [
+            ({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/87/merge"}, "PR candidate"),
+            ({"GITHUB_EVENT_NAME": "pull_request_target", "GITHUB_REF": "refs/heads/main"}, "PR candidate"),
+            ({"GITHUB_REF": "refs/pull/87/merge"}, "PR candidate"),
+            ({"SDK_E2E_PR_NUMBER": "87", "SDK_E2E_MERGE_SHA": RELEASE_SHA}, "PR candidate"),
+            ({"SDK_E2E_PR_NUMBER": "87"}, "PR candidate"),
+            ({"SDK_E2E_MERGE_SHA": RELEASE_SHA}, "PR candidate"),
             ({"SDK_E2E_SOURCE_SHA": "A" * 40}, "source-sha"),
-            ({"SDK_E2E_SOURCE_SHA": "refs/tags/v3.0.17"}, "source-sha"),
             ({"SDK_E2E_SOURCE_SHA": "b" * 39}, "source-sha"),
-            ({"GITHUB_REPOSITORY": "rudderlabs/analytics-go"}, "Node caller"),
-            ({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/87/merge"}, "non-PR"),
+            ({"SDK_E2E_SOURCE_SHA": "refs/tags/v3.0.17"}, "source-sha"),
         ]
         for version in ("latest", "^3.0.17", "3.0.x", "3.0.17 ", "3.0.17\n",
-                        "3.0.17; echo unsafe", "v3.0.17", "03.0.17", "3.0.17+local"):
-            invalid.append(({"SDK_E2E_PACKAGE_VERSION": version}, "package-version"))
-        for changes, message in invalid:
+                        "3.0.17; echo unsafe", "v3.0.17", "03.0.17", "3.0.17+local",
+                        "3.0.17-rc.1"):
+            cases.append(({"SDK_E2E_PACKAGE_VERSION": version}, "package-version"))
+        for changes, message in cases:
             with self.subTest(changes=changes), patch.dict(os.environ, dict(valid, **changes), clear=True), \
                     patch.object(dispatch, "dispatch_and_wait") as wait, \
                     contextlib.redirect_stderr(io.StringIO()) as stderr:
@@ -108,10 +180,11 @@ class InputTests(unittest.TestCase):
                 self.assertIn(message, stderr.getvalue())
                 wait.assert_not_called()
 
-    def test_source_sha_override_without_version_is_rejected_for_pr_and_non_pr(self):
-        for event in ("pull_request", "push"):
+    def test_source_sha_override_requires_published_mode(self):
+        for event in ("push", "pull_request", "workflow_dispatch"):
             with self.subTest(event=event), self.assertRaisesRegex(ValueError, "requires package-version"):
-                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME=event, GITHUB_REF="refs/pull/87/merge",
+                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME=event,
+                                     GITHUB_REF="refs/pull/87/merge" if event == "pull_request" else "",
                                      SDK_E2E_SOURCE_SHA=RELEASE_SHA))
 
 
@@ -169,29 +242,28 @@ class DispatchTests(unittest.TestCase):
         self.assertIn(url, self.summary.read_text())
         self.assertNotIn("test-token", self.summary.read_text())
 
-    def published(self):
-        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
-                                             GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
-                                             SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))
+    def test_published_dispatch_forwards_exact_version_and_release_sha(self):
+        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                             SDK_E2E_PACKAGE_VERSION="3.0.17",
+                                             SDK_E2E_SOURCE_SHA=RELEASE_SHA, SDK_E2E_SUITE="full"))
         self.run["display_title"] = f"sdk-e2e {self.selected['request_id']}"
-
-    def test_published_dispatch_sends_exact_version_and_release_sha(self):
-        self.published()
         _, request = self.wait([{"workflow_run_id": 123}, self.run])
-        payload = request.call_args_list[0].args[2]
-        self.assertEqual(payload["inputs"]["package_version"], "3.0.17")
-        self.assertEqual(payload["inputs"]["source_sha"], RELEASE_SHA)
-        self.assertEqual(payload["inputs"]["suite"], "full")
-        self.assertNotIn("source_pr", payload["inputs"])
-        self.assertIn(RELEASE_SHA, self.summary.read_text())
+        self.assertEqual(request.call_args_list[0].args[2]["inputs"], self.selected)
+        self.assertEqual(self.selected["package_version"], "3.0.17")
+        self.assertEqual(self.selected["source_sha"], RELEASE_SHA)
+        self.assertNotIn("source_pr", self.selected)
 
-    def test_published_failure_cancellation_identity_mismatch_and_timeout_fail(self):
-        self.published()
-        for conclusion in ("failure", "cancelled"):
-            with self.subTest(conclusion=conclusion), self.assertRaisesRegex(RuntimeError, "concluded"):
-                self.wait([{"workflow_run_id": 123}, dict(self.run, conclusion=conclusion)])
+    def test_explicit_candidate_dispatch_keeps_exact_run_identity_checks(self):
+        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                             SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40))
+        self.run["display_title"] = f"sdk-e2e {self.selected['request_id']}"
+        url, request = self.wait([{"workflow_run_id": 123}, self.run])
+        self.assertTrue(url.endswith("/123"))
+        self.assertEqual(request.call_args_list[0].args[2]["inputs"], self.selected)
         with self.assertRaisesRegex(RuntimeError, "request title"):
-            self.wait([{"workflow_run_id": 123}, dict(self.run, display_title="sdk-e2e wrong-request")])
+            self.wait([{"workflow_run_id": 123}, dict(self.run, display_title=f"sdk-e2e analytics-go-42-2-{SHA}")])
+        with self.assertRaisesRegex(RuntimeError, "concluded"):
+            self.wait([{"workflow_run_id": 123}, dict(self.run, conclusion="failure")])
 
     def test_all_unsuccessful_conclusions_fail(self):
         for conclusion in ("failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", None):
@@ -262,6 +334,14 @@ class EntrypointTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(dispatch.main(), 1)
                 wait.assert_not_called()
+
+    def test_explicit_candidate_input_failure_does_not_dispatch(self):
+        environment = dict(ENVIRONMENT, GH_TOKEN="test-token", SDK_E2E_PR_NUMBER="87")
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(dispatch, "dispatch_and_wait") as wait, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(dispatch.main(), 1)
+            wait.assert_not_called()
 
     def test_valid_timeout_reaches_dispatch_and_failure_reaches_exit_status(self):
         environment = dict(ENVIRONMENT, GH_TOKEN="test-token", SDK_E2E_TIMEOUT_SECONDS="60")
