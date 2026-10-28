@@ -41,6 +41,68 @@ class InputTests(unittest.TestCase):
         self.assertEqual(selected["source_sha"], SHA)
         self.assertEqual(selected["suite"], "full")
 
+    def test_explicit_pr_from_trusted_non_pr_event_uses_merge_sha_not_event_sha(self):
+        merge_sha = "b" * 40
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                        SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA=merge_sha))
+        self.assertEqual(selected["selection"], "auto")
+        self.assertEqual(selected["source_repository"], ENVIRONMENT["GITHUB_REPOSITORY"])
+        self.assertEqual(selected["source_pr"], "87")
+        self.assertEqual(selected["source_sha"], merge_sha)
+        self.assertEqual(selected["request_id"], f"analytics-go-42-2-{merge_sha}")
+        self.assertNotEqual(selected["source_sha"], ENVIRONMENT["GITHUB_SHA"])
+
+    def test_explicit_pr_matching_pull_request_event_is_allowed(self):
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request",
+                                        GITHUB_REF="refs/pull/87/merge", SDK_E2E_PR_NUMBER="87",
+                                        SDK_E2E_MERGE_SHA=SHA))
+        self.assertEqual(selected["source_pr"], "87")
+        self.assertEqual(selected["source_sha"], SHA)
+
+    def test_partial_or_malformed_explicit_candidate_is_rejected(self):
+        for pr, sha in (("87", ""), ("", SHA), ("0", SHA), ("-87", SHA),
+                        ("087", SHA), ("87\n", SHA), ("87", "not-a-sha"),
+                        ("87", "B" * 40), ("87", SHA + "\n")):
+            with self.subTest(pr=pr, sha=sha), self.assertRaises(ValueError):
+                dispatch.inputs(dict(ENVIRONMENT, SDK_E2E_PR_NUMBER=pr, SDK_E2E_MERGE_SHA=sha))
+
+    def test_explicit_pr_rejects_conflicting_pull_request_context(self):
+        for pr, sha, ref in (("88", SHA, "refs/pull/87/merge"),
+                             ("87", "b" * 40, "refs/pull/87/merge"),
+                             ("87", SHA, "refs/heads/master")):
+            with self.subTest(pr=pr, sha=sha, ref=ref), self.assertRaises(ValueError):
+                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request",
+                                     GITHUB_REF=ref, SDK_E2E_PR_NUMBER=pr, SDK_E2E_MERGE_SHA=sha))
+
+    def test_explicit_pr_rejects_conflicting_pull_request_target_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            event_path = Path(temporary) / "event.json"
+            environment = dict(ENVIRONMENT, GITHUB_EVENT_NAME="pull_request_target",
+                               GITHUB_REF="refs/heads/master", GITHUB_EVENT_PATH=str(event_path),
+                               SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40)
+            event_path.write_text(json.dumps({"number": 87}))
+            selected = dispatch.inputs(environment)
+            self.assertEqual(selected["source_pr"], "87")
+            self.assertEqual(selected["source_sha"], "b" * 40)
+            for payload in ({"number": 88}, {"number": "87"}, {"number": True}, {}, []):
+                with self.subTest(payload=payload):
+                    event_path.write_text(json.dumps(payload))
+                    with self.assertRaisesRegex(ValueError, "conflicts with the pull_request_target"):
+                        dispatch.inputs(environment)
+            event_path.write_text("not JSON")
+            with self.assertRaises(ValueError):
+                dispatch.inputs(environment)
+            with self.assertRaisesRegex(ValueError, "requires an event payload"):
+                dispatch.inputs(dict(environment, GITHUB_EVENT_PATH=""))
+
+    def test_explicit_candidate_does_not_trust_bot_identity_or_branch(self):
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                        GITHUB_ACTOR="release-please[bot]",
+                                        GITHUB_REF="refs/heads/release-please--branches--master",
+                                        SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40))
+        self.assertEqual(selected["selection"], "auto")
+        self.assertEqual(selected["source_pr"], "87")
+
     def test_new_sdk_repository_does_not_require_an_action_allowlist_update(self):
         selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-python"))
         self.assertEqual(selected["selection"], "auto")
@@ -90,7 +152,7 @@ class RequestTests(unittest.TestCase):
 class ArtifactDownloadTests(unittest.TestCase):
     def test_api_redirect_does_not_forward_token_to_archive_host(self):
         redirected = HTTPError(dispatch.API + "/actions/artifacts/456/zip", 302, "Found",
-                               {"Location": "https://signed.example/archive.zip"}, None)
+                               {"Location": "https://signed.example/archive.zip"}, io.BytesIO(b""))
         with patch.object(dispatch, "build_opener") as build:
             build.return_value.open.side_effect = [redirected, contextlib.closing(io.BytesIO(b"archive"))]
             self.assertEqual(dispatch.download_artifact(456, "secret-token"), b"archive")
@@ -106,11 +168,11 @@ class ArtifactDownloadTests(unittest.TestCase):
             with self.subTest(location=location), patch.object(dispatch, "build_opener") as build, \
                     self.assertRaisesRegex(RuntimeError, "invalid artifact download redirect"):
                 build.return_value.open.side_effect = HTTPError(dispatch.API, 302, "Found",
-                                                                 {"Location": location}, None)
+                                                                 {"Location": location}, io.BytesIO(b""))
                 dispatch.download_artifact(456, "token")
         with patch.object(dispatch, "build_opener") as build, self.assertRaisesRegex(RuntimeError, "oversized"):
             build.return_value.open.side_effect = [HTTPError(dispatch.API, 302, "Found",
-                                                               {"Location": "https://signed.example/a"}, None),
+                                                               {"Location": "https://signed.example/a"}, io.BytesIO(b"")),
                                                    contextlib.closing(io.BytesIO(b"x" * (dispatch.MAX_ARCHIVE_BYTES + 1)))]
             dispatch.download_artifact(456, "token")
 
@@ -255,6 +317,18 @@ class DispatchTests(unittest.TestCase):
             dispatch.dispatch_and_wait("test-token", self.selected, poll=0)
         self.assertNotIn("report=", self.output.read_text())
 
+    def test_explicit_candidate_dispatch_keeps_exact_run_identity_checks(self):
+        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
+                                             SDK_E2E_PR_NUMBER="87", SDK_E2E_MERGE_SHA="b" * 40))
+        self.run["display_title"] = f"sdk-e2e {self.selected['request_id']}"
+        url, request, _ = self.wait([{"workflow_run_id": 123}, self.run])
+        self.assertTrue(url.endswith("/123"))
+        self.assertEqual(request.call_args_list[0].args[2]["inputs"], self.selected)
+        with self.assertRaisesRegex(RuntimeError, "request title"):
+            self.wait([{"workflow_run_id": 123}, dict(self.run, display_title=f"sdk-e2e analytics-go-42-2-{SHA}")])
+        with self.assertRaisesRegex(RuntimeError, "concluded"):
+            self.wait([{"workflow_run_id": 123}, dict(self.run, conclusion="failure")])
+
     def test_all_unsuccessful_conclusions_fail(self):
         for conclusion in ("failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", None):
             with self.subTest(conclusion=conclusion), self.assertRaisesRegex(RuntimeError, "concluded"):
@@ -327,6 +401,14 @@ class EntrypointTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(dispatch.main(), 1)
                 wait.assert_not_called()
+
+    def test_explicit_candidate_input_failure_does_not_dispatch(self):
+        environment = dict(ENVIRONMENT, GH_TOKEN="test-token", SDK_E2E_PR_NUMBER="87")
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(dispatch, "dispatch_and_wait") as wait, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(dispatch.main(), 1)
+            wait.assert_not_called()
 
     def test_valid_timeout_reaches_dispatch_and_failure_reaches_exit_status(self):
         environment = dict(ENVIRONMENT, GH_TOKEN="test-token", SDK_E2E_TIMEOUT_SECONDS="60")
