@@ -88,6 +88,11 @@ The action uses GitHub API version `2026-03-10`, which returns the dispatched ru
 ID directly. It verifies the run's repository, workflow, event, branch, and request
 identity on every poll. It never guesses the latest matching run.
 
+GitHub can briefly return the workflow name before expanding the request-specific
+run title. The action waits up to 30 seconds for that title while checking all
+other identity fields. This wait is part of the overall timeout. A completed run
+must have the exact request title before its result can pass.
+
 Only a `success` conclusion passes. Failed, cancelled, skipped, mismatched, or
 timed-out runs fail the action. API errors and missing run IDs also fail.
 The action does not retry the dispatch POST because that could start duplicate

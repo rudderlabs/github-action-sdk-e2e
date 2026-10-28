@@ -53,12 +53,18 @@ def inputs(environment):
     return selected
 
 
-def validate_run(run, run_id, correlation):
+def validate_run(run, run_id, correlation, allow_pending_title=False):
     if (run.get("id") != run_id or run.get("repository", {}).get("full_name") != REPOSITORY
             or run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main"
-            or run.get("path") != f".github/workflows/{WORKFLOW}"
-            or run.get("display_title") != f"sdk-e2e {correlation}"):
+            or run.get("path") != f".github/workflows/{WORKFLOW}"):
         raise RuntimeError("central run identity does not match this dispatch")
+    if run.get("display_title") != f"sdk-e2e {correlation}":
+        # GitHub initially returns the workflow name before expanding run-name.
+        if (allow_pending_title and run.get("display_title") == "Server SDK validation"
+                and run.get("status") in ("queued", "in_progress", "waiting", "pending", "requested")):
+            return False
+        raise RuntimeError("central run request title does not match this dispatch")
+    return True
 
 
 def dispatch_and_wait(token, selected, timeout=3000, poll=15):
@@ -78,8 +84,9 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
     while time.monotonic() - started < timeout:
         run = request(f"/actions/runs/{run_id}", token)
-        validate_run(run, run_id, selected["request_id"])
-        if run.get("status") == "completed":
+        verified = validate_run(run, run_id, selected["request_id"],
+                                allow_pending_title=time.monotonic() - started < 30)
+        if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
             return url
