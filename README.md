@@ -131,6 +131,28 @@ python3 -m unittest discover -s tests -v
 Tests simulate the GitHub API and do not dispatch real workflows. CI also loads
 the composite action and verifies that missing credentials fail the step.
 
+## Releasing this action
+
+Release Please runs on `main` with the existing release App. Its short-lived
+token has contents and pull-request write access to this repository only.
+The ordinary workflow token remains read-only. No npm package is published.
+
+The first releasable commit after bootstrap commit
+`8fcd9661885616652b992c1fea8df5c2a163f6e2` starts the `1.0.0` release PR.
+The empty initial manifest means there is no previous release. `version.txt`
+starts at `0.0.0` as an unreleased placeholder; it is not a published version.
+The bootstrap boundary is ignored after the first release. Subsequent versions
+follow Conventional Commits: fixes increment patch, features increment minor,
+and breaking changes increment major. CI, docs and maintenance entries are hidden
+from user-facing notes and do not alone require a release.
+
+Review the generated version/changelog PR and its checks. Merging that release PR
+creates the version tag and GitHub release. It does not publish or release an SDK.
+Consumers continue to use full commit SHAs with version comments. Resolve the
+approved version tag to its commit and update consumer pins in reviewed PRs;
+there is no mutable major-version tag. Full live acceptance remains in each SDK's
+normal release process.
+
 ## License
 
 MIT
