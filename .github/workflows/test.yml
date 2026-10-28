@@ -8,10 +8,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: action-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  python:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
@@ -20,8 +28,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Test dispatcher
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test selected Python runtime
         run: python3 -m unittest discover -s tests -v
+      - name: Exercise the shipped composite action
+        id: success
+        uses: ./
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tests/fake_api
+          SDK_E2E_FIXTURE_CONCLUSION: success
+        with:
+          token: fixture-token
+      - name: Verify composite outputs
+        env:
+          RUN_ID: ${{ steps.success.outputs.run-id }}
+          RUN_URL: ${{ steps.success.outputs.run-url }}
+        run: |
+          test "$RUN_ID" = 123
+          test "$RUN_URL" = https://github.com/rudderlabs/rudder-sdk-e2e-tests/actions/runs/123
       - name: Verify composite action rejects missing credentials
         id: missing-token
         continue-on-error: true
@@ -33,3 +59,56 @@ jobs:
         env:
           OUTCOME: ${{ steps.missing-token.outcome }}
         run: test "$OUTCOME" = failure
+      - name: Exercise unsuccessful central validation
+        id: failure
+        continue-on-error: true
+        uses: ./
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tests/fake_api
+          SDK_E2E_FIXTURE_CONCLUSION: failure
+        with:
+          token: fixture-token
+      - name: Verify failure preserves outputs
+        if: always()
+        env:
+          OUTCOME: ${{ steps.failure.outcome }}
+          RUN_ID: ${{ steps.failure.outputs.run-id }}
+        run: test "$OUTCOME" = failure && test "$RUN_ID" = 123
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14'
+      - name: Lint Python
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python3 -m ruff check .
+      - name: Validate workflows
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -shellcheck=
+
+  test:
+    if: always()
+    needs: [python, lint]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every test and lint job
+        env:
+          PYTHON_RESULT: ${{ needs.python.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+        run: test "$PYTHON_RESULT" = success && test "$LINT_RESULT" = success

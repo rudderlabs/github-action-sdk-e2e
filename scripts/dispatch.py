@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 REPOSITORY = "rudderlabs/rudder-sdk-e2e-tests"
@@ -25,7 +25,11 @@ def request(path, token, payload=None):
             return json.loads(content) if content else {}
     except HTTPError as error:
         # Never print an API response that could include credentials or inputs.
-        raise RuntimeError(f"GitHub API request failed: HTTP {error.code}") from error
+        code = error.code
+        error.close()
+        raise RuntimeError(f"GitHub API request failed: HTTP {code}") from None
+    except (URLError, TimeoutError, ConnectionError):
+        raise RuntimeError("GitHub API request failed: transport error") from None
 
 
 def inputs(environment):
