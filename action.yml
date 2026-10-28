@@ -8,6 +8,10 @@ inputs:
   suite:
     description: reliability runs local delivery checks; full also runs live pipeline checks.
     default: reliability
+  package-version:
+    description: Exact published Node npm version to validate; requires source-sha.
+  source-sha:
+    description: Full lowercase release commit SHA for published-package validation only.
   timeout-seconds:
     description: Maximum wait for central validation, from 1 to 3000 seconds.
     default: '3000'
@@ -30,5 +34,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.token }}
         SDK_E2E_SUITE: ${{ inputs.suite }}
+        SDK_E2E_PACKAGE_VERSION: ${{ inputs.package-version }}
+        SDK_E2E_SOURCE_SHA: ${{ inputs.source-sha }}
         SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
       run: python3 "$ACTION_PATH/scripts/dispatch.py"

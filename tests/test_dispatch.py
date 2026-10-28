@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import dispatch
 
 SHA = "a" * 40
+RELEASE_SHA = "b" * 40
 ENVIRONMENT = {
     "GITHUB_REPOSITORY": "rudderlabs/analytics-go",
     "GITHUB_SHA": SHA,
@@ -62,6 +63,56 @@ class InputTests(unittest.TestCase):
         first = dispatch.inputs(ENVIRONMENT)
         second = dispatch.inputs(dict(ENVIRONMENT, GITHUB_RUN_ATTEMPT="3"))
         self.assertNotEqual(first["request_id"], second["request_id"])
+
+    def test_published_node_uses_release_sha_not_manual_event_sha(self):
+        selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
+                                        GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
+                                        SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))
+        self.assertEqual(selected, {"selection": "auto", "source_repository": "rudderlabs/rudder-sdk-node",
+                                    "source_sha": RELEASE_SHA, "package_version": "3.0.17", "suite": "full",
+                                    "request_id": f"rudder-sdk-node-42-2-{RELEASE_SHA}-npm-3.0.17"})
+        self.assertNotEqual(selected["source_sha"], ENVIRONMENT["GITHUB_SHA"])
+        self.assertEqual(selected["source_sha"], dispatch.inputs(dict(
+            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node", GITHUB_EVENT_NAME="release",
+            SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["source_sha"])
+        candidate = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node"))
+        self.assertNotIn("package_version", candidate)
+        self.assertNotEqual(candidate["request_id"], selected["request_id"])
+        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
+            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node", GITHUB_RUN_ATTEMPT="3",
+            SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["request_id"])
+        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
+            ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
+            SDK_E2E_PACKAGE_VERSION="3.0.18", SDK_E2E_SOURCE_SHA=RELEASE_SHA))["request_id"])
+
+    def test_published_input_validation_fails_closed_before_dispatch(self):
+        valid = dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
+                     GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_PACKAGE_VERSION="3.0.17",
+                     SDK_E2E_SOURCE_SHA=RELEASE_SHA, GH_TOKEN="test-token")
+        invalid = [
+            ({"SDK_E2E_SOURCE_SHA": ""}, "source-sha"),
+            ({"SDK_E2E_SOURCE_SHA": "A" * 40}, "source-sha"),
+            ({"SDK_E2E_SOURCE_SHA": "refs/tags/v3.0.17"}, "source-sha"),
+            ({"SDK_E2E_SOURCE_SHA": "b" * 39}, "source-sha"),
+            ({"GITHUB_REPOSITORY": "rudderlabs/analytics-go"}, "Node caller"),
+            ({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/87/merge"}, "non-PR"),
+        ]
+        for version in ("latest", "^3.0.17", "3.0.x", "3.0.17 ", "3.0.17\n",
+                        "3.0.17; echo unsafe", "v3.0.17", "03.0.17", "3.0.17+local"):
+            invalid.append(({"SDK_E2E_PACKAGE_VERSION": version}, "package-version"))
+        for changes, message in invalid:
+            with self.subTest(changes=changes), patch.dict(os.environ, dict(valid, **changes), clear=True), \
+                    patch.object(dispatch, "dispatch_and_wait") as wait, \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(dispatch.main(), 1)
+                self.assertIn(message, stderr.getvalue())
+                wait.assert_not_called()
+
+    def test_source_sha_override_without_version_is_rejected_for_pr_and_non_pr(self):
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event), self.assertRaisesRegex(ValueError, "requires package-version"):
+                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME=event, GITHUB_REF="refs/pull/87/merge",
+                                     SDK_E2E_SOURCE_SHA=RELEASE_SHA))
 
 
 class RequestTests(unittest.TestCase):
@@ -117,6 +168,30 @@ class DispatchTests(unittest.TestCase):
         self.assertIn(SHA, self.summary.read_text())
         self.assertIn(url, self.summary.read_text())
         self.assertNotIn("test-token", self.summary.read_text())
+
+    def published(self):
+        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY="rudderlabs/rudder-sdk-node",
+                                             GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
+                                             SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA))
+        self.run["display_title"] = f"sdk-e2e {self.selected['request_id']}"
+
+    def test_published_dispatch_sends_exact_version_and_release_sha(self):
+        self.published()
+        _, request = self.wait([{"workflow_run_id": 123}, self.run])
+        payload = request.call_args_list[0].args[2]
+        self.assertEqual(payload["inputs"]["package_version"], "3.0.17")
+        self.assertEqual(payload["inputs"]["source_sha"], RELEASE_SHA)
+        self.assertEqual(payload["inputs"]["suite"], "full")
+        self.assertNotIn("source_pr", payload["inputs"])
+        self.assertIn(RELEASE_SHA, self.summary.read_text())
+
+    def test_published_failure_cancellation_identity_mismatch_and_timeout_fail(self):
+        self.published()
+        for conclusion in ("failure", "cancelled"):
+            with self.subTest(conclusion=conclusion), self.assertRaisesRegex(RuntimeError, "concluded"):
+                self.wait([{"workflow_run_id": 123}, dict(self.run, conclusion=conclusion)])
+        with self.assertRaisesRegex(RuntimeError, "request title"):
+            self.wait([{"workflow_run_id": 123}, dict(self.run, display_title="sdk-e2e wrong-request")])
 
     def test_all_unsuccessful_conclusions_fail(self):
         for conclusion in ("failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", None):

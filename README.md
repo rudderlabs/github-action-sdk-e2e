@@ -73,7 +73,9 @@ Use the identifier configured by the repository's release workflow. Node uses
 Keep the private key in GitHub Secrets and pass only the generated token to this
 action. The caller's ordinary `GITHUB_TOKEN` cannot dispatch into the internal
 test repository.
-The workflow also supports release events; the action uses the event's commit SHA.
+For source candidates, including release-event pre-publication checks, the action
+uses the event's commit SHA. The release workflow must ensure its event/checkout
+points to the exact commit it builds; it must not substitute the latest branch.
 
 Keep `SDK_E2E_SUITE` unset or set to `reliability` until live delivery and cleanup
 acceptance are complete. Then set it to `full` for automatic default-branch and
@@ -87,7 +89,9 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
-| `suite` | `reliability` | `reliability` or `full`. |
+| `suite` | `reliability` | `reliability` or `full`; pass `full` explicitly for release acceptance. |
+| `package-version` | Empty | Exact published Node npm version, without `v` or a range; requires `source-sha`. |
+| `source-sha` | Empty | Full lowercase release commit SHA; only accepted with `package-version`. |
 | `timeout-seconds` | `3000` | Wait budget from 1 to 3000 seconds. Set the caller job timeout higher. |
 
 | Output | Purpose |
@@ -95,11 +99,55 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
 
-The action derives the source repository and SHA from the caller's GitHub event.
-For `pull_request`, it also sends the PR number from `refs/pull/<number>/merge`.
+The action derives the source repository from the caller's GitHub event and,
+for source candidates, uses its SHA. For `pull_request`, it also sends the PR
+number from `refs/pull/<number>/merge`. Published Node requests instead use the
+explicit `source-sha` release commit.
 The central runner validates repository authorization and candidate provenance.
-Its current source-candidate adapters support Go and Node; other SDKs need central
-adapter support before using this action.
+Its source-candidate adapters support Go and Node; other SDKs need central adapter
+support before using this action.
+
+### Exact published Node package
+
+After npm publication, pass the **exact published version and its immutable
+release source commit** together. The central Node adapter selects that registry
+package (not the source tarball or latest dist-tag), verifies its source version,
+and checks the source commit against default-branch history. The action validates
+input syntax but cannot prove version/SHA provenance locally; central validation
+must verify the requested package and source belong together. The release
+workflow must resolve the release tag/metadata to its commit and verify the
+checked-out publish artifact's
+version matches the release metadata. Never use the latest branch head.
+
+```yaml
+- name: Accept the published Node release
+  uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
+  with:
+    token: ${{ steps.token.outputs.token }}
+    suite: full
+    package-version: ${{ needs.deploy-tag.outputs.version }}
+    source-sha: ${{ needs.deploy-tag.outputs.source-sha }}
+```
+
+`ACTION_COMMIT_SHA` must be replaced with the **reviewed full commit** of this
+action after central published-package support is deployed. Do not pin a
+placeholder, moving branch, or unreviewed commit in an SDK workflow. Keep the
+pre-publication source-candidate gate ahead of publishing, and gate release-
+complete notifications on successful post-publication full acceptance. If that
+acceptance fails, report it visibly: the published npm package is not rolled back.
+
+For validation-only retries, resolve the requested version's release tag and
+immutable commit independently of the manually triggered workflow's `GITHUB_SHA`.
+Pass both to this action with `suite: full` and **do not call the publish job**.
+The action rejects missing/malformed release SHA, ranges/dist-tags and PR or
+source-candidate SHA overrides. Retries get their own request identity; inspect
+previous central runs before retrying, since a timed-out caller cannot cancel a
+central live run. The Node caller should have a static test where a manual event
+SHA differs from the release commit but dispatch receives the latter.
+
+Tracking: [SDK-5962 (shared interface)](https://linear.app/rudderstack/issue/SDK-5962/expose-exact-published-version-validation-through-the-shared-e2e),
+[SDK-5961 (central published-package adapter)](https://linear.app/rudderstack/issue/SDK-5961/validate-exact-published-server-sdk-packages-in-the-central-e2e),
+[SDK-5963 (Node workflow)](https://linear.app/rudderstack/issue/SDK-5963).
 
 The target is fixed to `server-sdk-validation.yml` on `main` in
 `rudderlabs/rudder-sdk-e2e-tests`. That workflow must be deployed before use.
