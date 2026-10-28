@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import textwrap
 import unittest
@@ -12,6 +13,7 @@ from urllib.error import URLError
 from urllib.parse import unquote
 
 WORKFLOW = (Path(__file__).resolve().parents[1] / ".github/workflows/published-sdk-e2e.yml").read_text()
+README = (Path(__file__).resolve().parents[1] / "README.md").read_text()
 # Run exactly the Python block embedded in the workflow, not a parallel implementation.
 SCRIPT = textwrap.dedent(WORKFLOW.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
 SHA = "a" * 40
@@ -136,6 +138,31 @@ class PreflightTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_documented_manual_retry_cannot_reach_publication(self):
+        release_section = README.split("In the SDK's existing `release: published` workflow", 1)[1]
+        release_job = release_section.split("```yaml\n", 1)[1].split("\n```", 1)[0]
+        retry_section = README.split("Create a separate `.github/workflows/retry-published-sdk-e2e.yml`", 1)[1]
+        retry_workflow = retry_section.split("```yaml\n", 1)[1].split("\n```", 1)[0]
+
+        self.assertIn("needs: publish", release_job)
+        self.assertIn("package-version: ${{ github.event.release.tag_name }}", release_job)
+        self.assertIn("  workflow_dispatch:\n", retry_workflow)
+        self.assertNotIn("  release:\n", retry_workflow)
+        jobs = retry_workflow.split("\njobs:\n", 1)[1]
+        self.assertEqual(re.findall(r"^  ([a-z][a-z0-9-]*):$", jobs, re.MULTILINE),
+                         ["published-e2e"])
+        self.assertNotIn("steps:", jobs)
+        self.assertNotIn("needs:", jobs)
+        self.assertNotIn("id-token: write", retry_workflow)
+        self.assertIn("package-version: ${{ inputs.package-version }}", jobs)
+        self.assertIn("uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA", jobs)
+        self.assertEqual(re.findall(r"^      ([A-Z][A-Z_]+): \$\{\{ secrets\.[^}]+\}\}$",
+                                    jobs, re.MULTILINE), ["RELEASE_PRIVATE_KEY"])
+        self.assertEqual(re.findall(r"^  ([a-z][a-z0-9-]*):$",
+                                    WORKFLOW.split("\njobs:\n", 1)[1], re.MULTILINE),
+                         ["validate"])
+        self.assertNotIn("id-token: write", WORKFLOW)
+
     def test_step_order_and_least_privilege(self):
         self.assertIn("on:\n  workflow_call:\n", WORKFLOW)
         self.assertIn("permissions: {}", WORKFLOW)

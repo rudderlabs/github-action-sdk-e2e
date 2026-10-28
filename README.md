@@ -99,12 +99,36 @@ do not use `./.github/workflows/...` across repositories. The caller job must
 allow `contents: read` (the preflight reads the caller's release and tag), pass
 the existing release App secret explicitly, and use exactly one release App
 identifier. Go uses `vars.RELEASE_APP_ID`; the other eight callers use
-`vars.RELEASE_APP_CLIENT_ID`. For example, in an SDK publisher workflow:
+`vars.RELEASE_APP_CLIENT_ID`.
+
+In the SDK's existing `release: published` workflow, add this job under `jobs:`
+after the native publisher job. Replace `publish` with the job that verifies the
+package on the public registry. The `needs:` dependency allows acceptance only
+after that job succeeds. Do not add `workflow_dispatch` to the publisher for
+validation retries:
 
 ```yaml
+  published-e2e:
+    needs: publish
+    permissions:
+      contents: read
+    uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA
+    with:
+      package-version: ${{ github.event.release.tag_name }}
+      release-app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    secrets:
+      RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+```
+
+Create a separate `.github/workflows/retry-published-sdk-e2e.yml` for manual
+validation of an existing release. In the Run workflow UI, select that release's
+`vX.Y.Z` tag and enter the same exact version. This workflow has no publisher job
+or publishing credentials:
+
+```yaml
+name: Retry published SDK E2E
+
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       package-version:
@@ -116,22 +140,21 @@ permissions: {}
 
 jobs:
   published-e2e:
-    # Keep the SDK's existing publish job and its dependency ordering intact.
-    # For manual retries select the existing release tag in GitHub's Run workflow UI.
     permissions:
       contents: read
     uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA
     with:
-      package-version: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.package-version }}
+      package-version: ${{ inputs.package-version }}
       release-app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
     secrets:
       RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
 ```
 
-For Go, replace `release-app-client-id` with `release-app-id: ${{ vars.RELEASE_APP_ID }}`.
-Adapt the trigger and `needs:` to each SDK's native publisher: the public package
-must exist before validation. Do not run this workflow for release candidates or
-fork PRs. The preflight, before any App token is created, checks the approved SDK
+For Go, replace `release-app-client-id` in both jobs with
+`release-app-id: ${{ vars.RELEASE_APP_ID }}`. Keep publication and public-registry
+verification in the SDK's release workflow; the retry workflow cannot invoke
+them. Do not run validation for release candidates or fork PRs. The preflight,
+before any App token is created, checks the approved SDK
 repository, inherited ref and SHA, the published release, and the tag's commit
 (including annotated tags) using the caller's read-only token. The generated App
 token is limited to Actions write on `rudder-sdk-e2e-tests` and is revoked at
