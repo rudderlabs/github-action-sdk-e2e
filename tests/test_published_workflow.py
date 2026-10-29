@@ -160,8 +160,27 @@ class WorkflowContractTests(unittest.TestCase):
                                     jobs, re.MULTILINE), ["RELEASE_PRIVATE_KEY"])
         self.assertEqual(re.findall(r"^  ([a-z][a-z0-9-]*):$",
                                     WORKFLOW.split("\njobs:\n", 1)[1], re.MULTILINE),
-                         ["validate"])
+                         ["validate", "result"])
         self.assertNotIn("id-token: write", WORKFLOW)
+
+    def test_failed_dispatch_retains_outputs_and_fails_acceptance(self):
+        import subprocess
+        import yaml
+
+        jobs = yaml.load(WORKFLOW, Loader=yaml.BaseLoader)["jobs"]
+        validate, result = jobs["validate"], jobs["result"]
+        dispatch = next(step for step in validate["steps"] if step.get("id") == "e2e")
+        self.assertEqual(dispatch["continue-on-error"], "true")
+        self.assertEqual(validate["outputs"]["outcome"], "${{ steps.e2e.outcome }}")
+        self.assertEqual(result["needs"], "validate")
+        self.assertEqual(result["if"], "always()")
+        self.assertEqual(result["permissions"], {})
+        for job, outcome in (("success", "success"), ("success", "failure"),
+                             ("failure", ""), ("cancelled", ""), ("skipped", "")):
+            with self.subTest(job=job, outcome=outcome):
+                checked = subprocess.run(["bash", "-e", "-c", result["steps"][0]["run"]],
+                                         env=dict(os.environ, VALIDATE_RESULT=job, E2E_OUTCOME=outcome))
+                self.assertEqual(checked.returncode == 0, job == outcome == "success")
 
     def test_step_order_and_least_privilege(self):
         self.assertIn("on:\n  workflow_call:\n", WORKFLOW)

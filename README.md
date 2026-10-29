@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 55
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - name: Create a central validation token
@@ -177,6 +177,8 @@ head and must be reviewed before adoption. No SDK callers are changed here.
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
 | `suite` | `reliability` | `reliability` or `full`. |
+| `pr-number` | Unset | Explicit PR number for a trusted caller; requires `merge-sha`. |
+| `merge-sha` | Unset | Explicit full lowercase current PR merge SHA; requires `pr-number`. |
 | `timeout-seconds` | `3000` | Wait budget from 1 to 3000 seconds. Set the caller job timeout higher. |
 
 | Output | Purpose |
@@ -184,11 +186,40 @@ head and must be reviewed before adoption. No SDK callers are changed here.
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
 
-The action derives the source repository and SHA from the caller's GitHub event.
-For `pull_request`, it also sends the PR number from `refs/pull/<number>/merge`.
-The central runner validates repository authorization and candidate provenance.
-Its current source-candidate adapters support Go and Node; other SDKs need central
-adapter support before using this action.
+By default, the action derives the source repository and SHA from the caller's
+GitHub event. For `pull_request`, it also sends the PR number from
+`refs/pull/<number>/merge`. A trusted workflow that runs at a different event
+SHA (for example, a base-branch workflow selecting a Release Please PR) may
+pass both `pr-number` and `merge-sha` to select an explicit PR candidate:
+
+```yaml
+# In a trusted job, after retrieving the current PR number and merge_commit_sha
+# from the GitHub API without checking out or executing PR-controlled code:
+- uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
+  with:
+    token: ${{ steps.token.outputs.token }}
+    suite: reliability
+    pr-number: ${{ steps.candidate.outputs.pr-number }}
+    merge-sha: ${{ steps.candidate.outputs.merge-sha }}
+```
+
+Both inputs are required together; partial, malformed, or conflicting
+`pull_request` inputs fail before dispatch. On `pull_request_target`, explicit
+PR numbers must match the event payload's PR number or dispatch fails.
+Explicit inputs are claims,
+not authorization: this action keeps the existing `selection: auto` central
+contract, which checks repository eligibility and verifies that the supplied
+SHA is the PR's **current merge SHA**. It never trusts a bot actor or branch
+prefix as proof. The trusted caller must re-fetch and compare the PR's current
+merge SHA after central validation succeeds; a changed PR invalidates the
+result. For the Node release gate, use a separate caller PR pinned to the
+reviewed full action commit and link it to this action change. Require a
+stable aggregate check for eligible PRs and define fork, Dependabot, and
+skipped-job behavior in that caller; review the required-check rule separately
+and verify repository rules before claiming enforcement. This action alone
+cannot gate npm publication or control upload order. Its current source-candidate
+adapters support Go and Node; other SDKs need central adapter support before
+using this action.
 
 The target is fixed to `server-sdk-validation.yml` on `main` in
 `rudderlabs/rudder-sdk-e2e-tests`. That workflow must be deployed before use.

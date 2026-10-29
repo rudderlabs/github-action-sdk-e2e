@@ -8,6 +8,10 @@ inputs:
   suite:
     description: reliability runs local delivery checks; full also runs live pipeline checks.
     default: reliability
+  pr-number:
+    description: Optional PR number for a trusted caller selecting an explicit PR candidate; requires merge-sha.
+  merge-sha:
+    description: Optional current PR merge commit SHA; requires pr-number.
   timeout-seconds:
     description: Maximum wait for central validation, from 1 to 3000 seconds.
     default: '3000'
@@ -30,5 +34,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.token }}
         SDK_E2E_SUITE: ${{ inputs.suite }}
+        SDK_E2E_PR_NUMBER: ${{ inputs.pr-number }}
+        SDK_E2E_MERGE_SHA: ${{ inputs.merge-sha }}
         SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
       run: python3 "$ACTION_PATH/scripts/dispatch.py"
