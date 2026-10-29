@@ -10,6 +10,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import validation_result
+
 REPOSITORY = "rudderlabs/rudder-sdk-e2e-tests"
 WORKFLOW = "server-sdk-validation.yml"
 API = f"https://api.github.com/repos/{REPOSITORY}"
@@ -62,6 +64,16 @@ def inputs(environment):
     correlation = f"{repository.split('/')[1]}-{run_id}-{attempt}-{sha}"
     selected = {"selection": "auto", "source_repository": repository, "source_sha": sha,
                 "suite": suite, "request_id": correlation}
+    version = environment.get("SDK_E2E_PACKAGE_VERSION", "")
+    if version:
+        if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+            raise ValueError("package-version must be an exact stable version (X.Y.Z or vX.Y.Z)")
+        if (environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request")
+                or environment.get("GITHUB_REF", "").startswith("refs/pull/")
+                or pr or merge_sha):
+            raise ValueError("published-package validation cannot originate from a pull request")
+        selected["package_version"] = version
+        selected["request_id"] += f"-published-{version}"
     if environment.get("GITHUB_EVENT_NAME") == "pull_request":
         match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
         if not match:
@@ -80,6 +92,7 @@ def inputs(environment):
                     or event["number"] != int(pr)):
                 raise ValueError("explicit PR candidate conflicts with the pull_request_target event PR number")
         selected["source_pr"] = pr
+    selected["request_id"] = selected["request_id"].replace(".", "_")
     return selected
 
 
@@ -112,6 +125,8 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
+            if selected.get("package_version"):
+                summary.write(f"\nMode: published package `{selected['package_version']}`\n")
     while time.monotonic() - started < timeout:
         run = request(f"/actions/runs/{run_id}", token)
         verified = validate_run(run, run_id, selected["request_id"],
@@ -119,6 +134,13 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
+            if selected["suite"] == "full" and not selected.get("source_pr"):
+                report, package = validation_result.verified(token, run, selected, request, API)
+                if os.environ.get("GITHUB_OUTPUT"):
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
+                        if package:
+                            output.write(f"package-file={package}\n")
             return url
         time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
     raise RuntimeError(f"timed out waiting for server SDK validation; central run may still be active: {url}")

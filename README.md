@@ -82,12 +82,119 @@ Full candidate validation requires a commit in the SDK's default-branch history.
 Fork and Dependabot PRs skip this privileged caller; merged changes still run on
 the default-branch push. Do not copy the release App key into Dependabot secrets.
 
+## Published package validation
+
+The reusable workflow `.github/workflows/published-sdk-e2e.yml` validates the
+**published package**, not a source candidate. After the SDK's native publisher
+has completed successfully, call the workflow on the `release: published` event.
+For a validation-only retry of an existing published version, use
+`workflow_dispatch` on its release tag; do not republish or dispatch the central
+suite from a PR or branch. The caller must pass its exact stable package version
+(`X.Y.Z` or `vX.Y.Z`). Both input spellings require the canonical `vX.Y.Z`
+release tag; the central published-package validator verifies that tag.
+Bare release tags, prereleases, and drafts are rejected.
+
+Pin the **reusable workflow** to a reviewed full commit SHA when it is merged;
+do not use `./.github/workflows/...` across repositories. The caller job must
+allow `contents: read` (the preflight reads the caller's release and tag), pass
+the existing release App secret explicitly, and use exactly one release App
+identifier. Use the identifier already configured in the SDK's release workflow.
+The shared workflow accepts either identifier for every approved SDK. Current Go
+callers use `vars.RELEASE_APP_ID`; the other eight callers use
+`vars.RELEASE_APP_CLIENT_ID`.
+
+In the SDK's existing `release: published` workflow, add this job under `jobs:`
+after the native publisher job. Replace `publish` with the job that verifies the
+package on the public registry. The `needs:` dependency allows acceptance only
+after that job succeeds. Do not add `workflow_dispatch` to the publisher for
+validation retries:
+
+```yaml
+  published-e2e:
+    needs: publish
+    permissions:
+      contents: read
+    uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA
+    with:
+      package-version: ${{ github.event.release.tag_name }}
+      release-app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    secrets:
+      RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+```
+
+Create a separate `.github/workflows/retry-published-sdk-e2e.yml` for manual
+validation of an existing release. This workflow has no publisher job or
+publishing credentials:
+
+```yaml
+name: Retry published SDK E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      package-version:
+        description: Existing published stable version to revalidate
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  published-e2e:
+    permissions:
+      contents: read
+    uses: rudderlabs/github-action-sdk-e2e/.github/workflows/published-sdk-e2e.yml@WORKFLOW_COMMIT_SHA
+    with:
+      package-version: ${{ inputs.package-version }}
+      release-app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    secrets:
+      RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+```
+
+The retry workflow must exist on the SDK's default branch and at the selected
+release tag. Use the CLI to dispatch that tag explicitly. Replace
+`SDK_REPOSITORY` and `X.Y.Z` with the SDK repository and existing release version:
+
+```sh
+gh workflow run retry-published-sdk-e2e.yml \
+  --repo rudderlabs/SDK_REPOSITORY \
+  --ref vX.Y.Z \
+  -f package-version=X.Y.Z
+```
+
+The tag and package version must identify the same release. The web UI's branch
+selector cannot select the required release tag. See GitHub's
+[manual workflow requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
+and the CLI's [tag ref option](https://cli.github.com/manual/gh_workflow_run).
+
+For Go, replace `release-app-client-id` in both jobs with
+`release-app-id: ${{ vars.RELEASE_APP_ID }}`. Keep publication and public-registry
+verification in the SDK's release workflow; the retry workflow cannot invoke
+them. Do not run validation for release candidates or fork PRs. The preflight,
+before any App token is created, checks the approved SDK
+repository, inherited ref and SHA, the published release, and the tag's commit
+(including annotated tags) using the caller's read-only token. The generated App
+token is limited to Actions write on `rudder-sdk-e2e-tests` and is revoked at
+job completion. The workflow runs the full suite and exposes `run-id` and
+`run-url` outputs on success. On failure, use the central run URL in the logs or
+job summary; failed reusable jobs may not deliver outputs. A retry never cancels
+a previous central run; inspect that run and its cleanup before retrying.
+
+The composite action above remains the entry point for source candidates. The
+reusable workflow pins the merged shared result verifier at
+`b5370b94e03b098f67cafa3dc8871c52092507f2`. Central PR #32 provides published
+adapters and version selection; merged central PRs #33 and #35 provide shared
+isolation and validation results. Pin each SDK caller to the reviewed reusable
+workflow commit after this workflow merges. Record hosted delivery and cleanup
+acceptance at each SDK's next normal release. No SDK callers are changed here.
+
 ## Interface
 
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
 | `suite` | `reliability` | `reliability` or `full`. |
+| `package-version` | Empty | Exact stable published version (`X.Y.Z` or `vX.Y.Z`). |
 | `pr-number` | Unset | Explicit PR number for a trusted caller; requires `merge-sha`. |
 | `merge-sha` | Unset | Explicit full lowercase current PR merge SHA; requires `pr-number`. |
 | `timeout-seconds` | `3000` | Wait budget from 1 to 3000 seconds. Set the caller job timeout higher. |
@@ -96,6 +203,9 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | --- | --- |
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
+| `report` | Verified shared validation result JSON after full, non-PR validation. |
+| `validated-sha` | Commit from the verified result. Check its selection before using it for publication. |
+| `package-file` | Local path to the verified tested package, when the adapter includes one. |
 
 By default, the action derives the source repository and SHA from the caller's
 GitHub event. For `pull_request`, it also sends the PR number from
@@ -132,6 +242,33 @@ cannot gate npm publication or control upload order. Its current source-candidat
 adapters support Go and Node; other SDKs need central adapter support before
 using this action.
 
+## Published-package validation
+
+After the publishing job succeeds, call the action with `suite: full` and
+`package-version: ${{ needs.publish.outputs.version }}`. Export that version from
+the exact release commit used by the publishing job. The central workflow checks
+that the corresponding `vX.Y.Z` tag resolves to the event commit and belongs to
+the SDK's default-branch history. It installs the exact public registry package,
+checks its resolved version and integrity, then runs the existing delivery and
+cleanup checks. No SDK source package is substituted in this mode.
+
+Deploy central `package_version` support before adopting this input. Published
+adapters cover Go, Node, Python, Ruby, Ruby Sync, PHP, Rust, .NET and Java; each SDK
+still needs its own caller workflow. This interface alone does not enable those
+release workflows. PR events, ranges, prereleases and `latest` are rejected.
+
+Keep the pre-publication source check before publishing and the published-package
+check after publishing. For Go and PHP, creating the version tag starts
+publication, so a release-event check is already post-publication. Report release
+acceptance only after the published-package check passes. If acceptance fails,
+the package remains published.
+
+Retry only the failed validation job, or dispatch a validation-only workflow at
+the existing release tag with the same exact package version. Never rerun a
+successful publishing job merely to repeat E2E. Keep the shared action pinned to
+a reviewed full commit SHA in both paths. Candidate and published invocations
+use distinct request IDs, even within one caller run.
+
 The target is fixed to `server-sdk-validation.yml` on `main` in
 `rudderlabs/rudder-sdk-e2e-tests`. That workflow must be deployed before use.
 The action uses GitHub API version `2026-03-10`, which returns the dispatched run
@@ -152,6 +289,40 @@ Timeout or cancellation of the caller does not cancel the central run. A live
 run may need to restore its pipeline. Inspect the linked run before retrying.
 The caller controls triggers and release dependencies. The action does not
 change branch protection or require release-please to wait for E2E.
+
+## Verified SDK validation results
+
+After a successful full, non-PR run, the action verifies the current shared
+central result contract. Reliability runs use exact-run success and do not export
+a full result. Source candidates and published packages use the same verifier.
+
+The bundle is named `sdk-validation-result-<sdk>-<run ID>-<attempt>` and contains
+`validation-result.json` plus an optional tested package. The action uses the
+returned central run ID and attempt, requires exactly one matching non-expired
+artifact, and verifies its GitHub SHA-256 archive digest. Downloads are bounded.
+The GitHub credential is sent only to the API, never to the signed archive URL.
+
+The result must match the request, run, attempt, SDK, repository, commit, package,
+and selection. The SDK/package identity table contains data only; registry and
+source installation stay in the central harness. Published results must match
+the exact requested version and carry integrity evidence. Candidate results
+must carry a source tree. Delivery, restoration and lock release must all be
+verified. Any missing or mismatched result fails the action, even when the
+central run concluded successfully. Run ID and URL remain available on failure.
+
+When the bundle includes a tested package, the action verifies SHA-256 and
+SHA-512 integrity before retaining those bytes in a private temporary directory.
+It exports the path through `package-file`. The action never extracts or executes
+the native package. Unexpected archive entries, unsafe filenames and corrupted
+bytes fail validation. The package remains available for the rest of the job.
+
+Before publication, the SDK publisher must require `selection=candidate` and
+compare the expected SDK, repository, commit, package, version and source tree.
+A published-package result cannot authorize source publication. Recheck the
+current branch immediately before creating the tag or uploading the package.
+If the adapter produces a package, publish the verified `package-file` bytes, or
+reject a rebuild whose checksum differs. Parse `report` as JSON, never as shell
+code. Keep independent post-publication acceptance and final notification gates.
 
 ## Development
 
@@ -176,6 +347,28 @@ title action skips bot authors, so reviewers must also check bot PR titles.
 CODEOWNERS requests SDK team review. Dependabot and pinact delay external action
 updates by seven days; internal `rudderlabs/*` actions are exempt. All action
 references remain pinned to full commit SHAs.
+
+## Releasing this action
+
+Release Please runs on `main` with the existing release App. Its short-lived
+token has contents and pull-request write access to this repository only.
+The ordinary workflow token remains read-only. No npm package is published.
+
+The first releasable commit after bootstrap commit
+`8fcd9661885616652b992c1fea8df5c2a163f6e2` starts the `1.0.0` release PR.
+The empty initial manifest means there is no previous release. `version.txt`
+starts at `0.0.0` as an unreleased placeholder; it is not a published version.
+The bootstrap boundary is ignored after the first release. Subsequent versions
+follow Conventional Commits: fixes increment patch, features increment minor,
+and breaking changes increment major. CI, docs and maintenance entries are hidden
+from user-facing notes and do not alone require a release.
+
+Review the generated version/changelog PR and its checks. Merging that release PR
+creates the version tag and GitHub release. It does not publish or release an SDK.
+Consumers continue to use full commit SHAs with version comments. Resolve the
+approved version tag to its commit and update consumer pins in reviewed PRs;
+there is no mutable major-version tag. Full live acceptance remains in each SDK's
+normal release process.
 
 ## License
 
