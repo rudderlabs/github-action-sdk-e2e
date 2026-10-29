@@ -151,7 +151,7 @@ jobs:
         id: e2e
         continue-on-error: true
         # SDK-5962 adds package-version; do not use ./ (that resolves in the SDK caller).
-        uses: rudderlabs/github-action-sdk-e2e@855d3e174e917aab71b93a862c7e74592904d10e # SDK-5962 PR #5
+        uses: rudderlabs/github-action-sdk-e2e@a9cd2cf5c53c2674082795246224bf7e510581e5 # SDK-5962 PR #5
         with:
           token: ${{ steps.token.outputs.token }}
           package-version: ${{ steps.preflight.outputs.version }}
