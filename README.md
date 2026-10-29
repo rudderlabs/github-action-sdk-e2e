@@ -88,7 +88,7 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
 | `suite` | `reliability` | `reliability` or `full`; pass `full` explicitly for release acceptance. |
-| `package-version` | Unset | Exact stable published SDK package version, without a prefix, range, or prerelease. |
+| `package-version` | Unset | Exact stable published SDK package version (`X.Y.Z` or `vX.Y.Z`), without a range or prerelease. |
 | `source-sha` | Unset | Optional full lowercase release commit SHA for published validation; defaults to the event SHA. |
 | `pr-number` | Unset | Explicit PR number for a trusted caller; requires `merge-sha`. |
 | `merge-sha` | Unset | Explicit full lowercase current PR merge SHA; requires `pr-number`. |
