@@ -165,21 +165,19 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_failed_dispatch_retains_outputs_and_fails_acceptance(self):
         import subprocess
-        import yaml
 
-        jobs = yaml.load(WORKFLOW, Loader=yaml.BaseLoader)["jobs"]
-        validate, result = jobs["validate"], jobs["result"]
-        dispatch = next(step for step in validate["steps"] if step.get("id") == "e2e")
-        self.assertEqual(dispatch["continue-on-error"], "true")
-        self.assertEqual(validate["outputs"]["outcome"], "${{ steps.e2e.outcome }}")
-        self.assertEqual(result["needs"], "validate")
-        self.assertEqual(result["if"], "always()")
-        self.assertEqual(result["permissions"], {})
+        validate, result = WORKFLOW.split("\n  result:\n", 1)
+        self.assertIn("id: e2e\n        continue-on-error: true", validate)
+        self.assertIn("outcome: ${{ steps.e2e.outcome }}", validate)
+        self.assertIn("needs: validate", result)
+        self.assertIn("if: always()", result)
+        self.assertIn("permissions: {}", result)
+        script = result.split("        run: ", 1)[1].strip()
         for job, outcome in (("success", "success"), ("success", "failure"),
                              ("failure", ""), ("cancelled", ""), ("skipped", "")):
             with self.subTest(job=job, outcome=outcome):
-                checked = subprocess.run(["bash", "-e", "-c", result["steps"][0]["run"]],
-                                         env=dict(os.environ, VALIDATE_RESULT=job, E2E_OUTCOME=outcome))
+                checked = subprocess.run(["bash", "-e", "-c", script],
+                                         check=False, env=dict(os.environ, VALIDATE_RESULT=job, E2E_OUTCOME=outcome))
                 self.assertEqual(checked.returncode == 0, job == outcome == "success")
 
     def test_step_order_and_least_privilege(self):
