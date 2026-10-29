@@ -203,6 +203,9 @@ acceptance at each SDK's next normal release. No SDK callers are changed here.
 | --- | --- |
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
+| `report` | Verified shared validation result JSON after full, non-PR validation. |
+| `validated-sha` | Commit from the verified result. Check its selection before using it for publication. |
+| `package-file` | Local path to the verified tested package, when the adapter includes one. |
 
 By default, the action derives the source repository and SHA from the caller's
 GitHub event. For `pull_request`, it also sends the PR number from
@@ -286,6 +289,40 @@ Timeout or cancellation of the caller does not cancel the central run. A live
 run may need to restore its pipeline. Inspect the linked run before retrying.
 The caller controls triggers and release dependencies. The action does not
 change branch protection or require release-please to wait for E2E.
+
+## Verified SDK validation results
+
+After a successful full, non-PR run, the action verifies the current shared
+central result contract. Reliability runs use exact-run success and do not export
+a full result. Source candidates and published packages use the same verifier.
+
+The bundle is named `sdk-validation-result-<sdk>-<run ID>-<attempt>` and contains
+`validation-result.json` plus an optional tested package. The action uses the
+returned central run ID and attempt, requires exactly one matching non-expired
+artifact, and verifies its GitHub SHA-256 archive digest. Downloads are bounded.
+The GitHub credential is sent only to the API, never to the signed archive URL.
+
+The result must match the request, run, attempt, SDK, repository, commit, package,
+and selection. The SDK/package identity table contains data only; registry and
+source installation stay in the central harness. Published results must match
+the exact requested version and carry integrity evidence. Candidate results
+must carry a source tree. Delivery, restoration and lock release must all be
+verified. Any missing or mismatched result fails the action, even when the
+central run concluded successfully. Run ID and URL remain available on failure.
+
+When the bundle includes a tested package, the action verifies SHA-256 and
+SHA-512 integrity before retaining those bytes in a private temporary directory.
+It exports the path through `package-file`. The action never extracts or executes
+the native package. Unexpected archive entries, unsafe filenames and corrupted
+bytes fail validation. The package remains available for the rest of the job.
+
+Before publication, the SDK publisher must require `selection=candidate` and
+compare the expected SDK, repository, commit, package, version and source tree.
+A published-package result cannot authorize source publication. Recheck the
+current branch immediately before creating the tag or uploading the package.
+If the adapter produces a package, publish the verified `package-file` bytes, or
+reject a rebuild whose checksum differs. Parse `report` as JSON, never as shell
+code. Keep independent post-publication acceptance and final notification gates.
 
 ## Development
 

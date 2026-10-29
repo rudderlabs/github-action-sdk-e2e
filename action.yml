@@ -25,6 +25,15 @@ outputs:
   run-url:
     description: Link to the exact dispatched workflow run.
     value: ${{ steps.dispatch.outputs.run-url }}
+  report:
+    description: Verified shared SDK validation result JSON; available only after full non-PR validation.
+    value: ${{ steps.dispatch.outputs.report }}
+  validated-sha:
+    description: Commit recorded by the verified full validation result.
+    value: ${{ steps.dispatch.outputs.validated-sha }}
+  package-file:
+    description: Local path to the checksum-verified tested package when the result includes one.
+    value: ${{ steps.dispatch.outputs.package-file }}
 
 runs:
   using: composite

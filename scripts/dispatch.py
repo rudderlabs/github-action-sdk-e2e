@@ -10,6 +10,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import validation_result
+
 REPOSITORY = "rudderlabs/rudder-sdk-e2e-tests"
 WORKFLOW = "server-sdk-validation.yml"
 API = f"https://api.github.com/repos/{REPOSITORY}"
@@ -132,6 +134,13 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
+            if selected["suite"] == "full" and not selected.get("source_pr"):
+                report, package = validation_result.verified(token, run, selected, request, API)
+                if os.environ.get("GITHUB_OUTPUT"):
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
+                        if package:
+                            output.write(f"package-file={package}\n")
             return url
         time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
     raise RuntimeError(f"timed out waiting for server SDK validation; central run may still be active: {url}")
