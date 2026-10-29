@@ -33,7 +33,8 @@ jobs:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -55,7 +56,7 @@ jobs:
         uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
         with:
           token: ${{ steps.token.outputs.token }}
-          suite: ${{ startsWith(github.head_ref, 'release-please--') && 'full' || 'reliability' }}
+          suite: full
 ```
 
 Reuse the existing release App credentials already available to the SDK workflow.
@@ -69,15 +70,15 @@ Use the identifier configured by the repository's release workflow. Node uses
 Keep the private key in GitHub Secrets and pass only the generated token to this
 action. The caller's ordinary `GITHUB_TOKEN` cannot dispatch into the internal
 test repository.
-The example runs full live E2E on Release Please PRs and local reliability checks
-on other eligible PRs. The branch prefix selects coverage, not trust: candidate
-code always runs in isolation. Do not check out or execute SDK candidate code in
+The example runs full live E2E only on Release Please PRs. Normal build, unit,
+and integration checks remain separate checks on every SDK PR. The central
+repository runs its local harness tests in its own CI. Do not check out or execute SDK candidate code in
 the caller job that holds App credentials. Fork and Dependabot PRs skip this job;
 do not copy the release App key into Dependabot secrets.
 
-Full PR validation requires the central SDK-6012 implementation. It tests the
+Full PR validation requires the central SDK-6012 and SDK-6015 implementations. It tests the
 current synthetic PR merge commit, sends through the real development pipeline,
-and requires verified delivery, restoration, and lock release. The SDK container
+and requires verified delivery and verified deletion of owned resources. The SDK container
 receives only the dedicated dev source submission key and test identifiers;
 workspace/GitHub credentials remain outside. Treat that source key as visible
 to candidate code. The action verifies the result's PR number, commit and run.
@@ -206,7 +207,7 @@ acceptance at each SDK's next normal release. No SDK callers are changed here.
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
-| `suite` | `reliability` | `reliability` or `full`. |
+| `suite` | `full` | Full live delivery for the selected SDK. Local tests stay in central CI. |
 | `package-version` | Empty | Exact stable published version (`X.Y.Z` or `vX.Y.Z`). |
 | `pr-number` | Unset | Explicit PR number for a trusted caller; requires `merge-sha`. |
 | `merge-sha` | Unset | Explicit full lowercase current PR merge SHA; requires `pr-number`. |
@@ -232,7 +233,7 @@ pass both `pr-number` and `merge-sha` to select an explicit PR candidate:
 - uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
   with:
     token: ${{ steps.token.outputs.token }}
-    suite: reliability
+    suite: full
     pr-number: ${{ steps.candidate.outputs.pr-number }}
     merge-sha: ${{ steps.candidate.outputs.merge-sha }}
 ```
@@ -299,7 +300,7 @@ The action does not retry the dispatch POST because that could start duplicate
 runs. Once dispatched, the run URL remains available even if validation fails.
 
 Timeout or cancellation of the caller does not cancel the central run. A live
-run may need to restore its pipeline. Inspect the linked run before retrying.
+run may need to delete its owned resources. Inspect the linked run before retrying.
 The caller controls triggers and release dependencies. The action does not
 change branch protection or require release-please to wait for E2E.
 
@@ -319,7 +320,7 @@ The result must match the request, run, attempt, SDK, repository, commit, packag
 and selection. The SDK/package identity table contains data only; registry and
 source installation stay in the central harness. Published results must match
 the exact requested version and carry integrity evidence. Candidate results
-must carry a source tree. Delivery, restoration and lock release must all be
+must carry a source tree. Delivery, owned resource deletion and cleanup verification must all be
 verified. Any missing or mismatched result fails the action, even when the
 central run concluded successfully. Run ID and URL remain available on failure.
 
@@ -386,3 +387,15 @@ normal release process.
 ## License
 
 MIT
+
+## Deployment dependency
+
+This revision requires the ephemeral lifecycle result contract (schema 2) from
+central SDK-6015. The previous schema described restored persistent pipelines.
+The new schema requires `pipeline_mode: ephemeral`, `resources_destroyed: true`,
+and `cleanup_verified: true`. Old results are rejected.
+
+Deploy the central lifecycle, this action, and caller pins as a coordinated
+rollout. Update the reusable published workflow's internal action pin too.
+Existing callers pinned to the old verifier cannot consume the new contract.
+Keep these PRs unmerged until the dependent caller updates are ready.

@@ -113,7 +113,7 @@ def identity(report, run, selected, sdk):
     expected_sdk, package = IDENTITIES[selected["source_repository"]]
     if sdk != expected_sdk:
         raise ValueError("SDK artifact name does not match the caller repository")
-    expected = {"schema_version": 1, "request_id": selected["request_id"], "sdk": sdk,
+    expected = {"schema_version": 2, "pipeline_mode": "ephemeral", "request_id": selected["request_id"], "sdk": sdk,
                 "package": package,
                 "selection": mode, "repository": selected["source_repository"], "commit": selected["source_sha"],
                 "central_run_id": run["id"], "central_run_attempt": run["run_attempt"]}
@@ -124,7 +124,7 @@ def identity(report, run, selected, sdk):
     if (type(report) is not dict or any(type(report.get(key)) is not type(value) or report[key] != value
                                       for key, value in expected.items())
             or any(report.get(key) is not True for key in
-                   ("delivery_passed", "restoration_verified", "lock_released"))):
+                   ("delivery_passed", "resources_destroyed", "cleanup_verified"))):
         raise ValueError("SDK result identity or required results do not match")
     if not isinstance(report.get("package"), str) or not report["package"]:
         raise ValueError("missing SDK package identity")

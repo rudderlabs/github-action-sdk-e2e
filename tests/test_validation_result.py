@@ -39,12 +39,12 @@ class BundleTests(unittest.TestCase):
         self.selected = dispatch.inputs({"GITHUB_REPOSITORY": "rudderlabs/analytics-go", "GITHUB_SHA": "a" * 40,
                                          "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1", "SDK_E2E_SUITE": "full"})
         self.run = {"id": 123, "run_attempt": 2, "status": "completed", "conclusion": "success"}
-        self.report = {"schema_version": 1, "sdk": "go", "selection": "candidate",
+        self.report = {"schema_version": 2, "pipeline_mode": "ephemeral", "sdk": "go", "selection": "candidate",
                        "repository": self.selected["source_repository"], "commit": self.selected["source_sha"],
                        "request_id": self.selected["request_id"], "central_run_id": 123, "central_run_attempt": 2,
                        "package": "github.com/rudderlabs/analytics-go/v4", "version": "1.2.3",
                        "artifact": {"source_tree": "b" * 40}, "delivery_passed": True,
-                       "restoration_verified": True, "lock_released": True}
+                       "resources_destroyed": True, "cleanup_verified": True}
 
     def package(self):
         data = b"exact tested native package"
@@ -137,11 +137,11 @@ class BundleTests(unittest.TestCase):
                 self.verify(listed, data)
 
     def test_identity_results_types_and_source_evidence_fail_closed(self):
-        for key, value in (("schema_version", True), ("schema_version", 2), ("central_run_id", 124),
+        for key, value in (("schema_version", True), ("schema_version", 1), ("central_run_id", 124),
                            ("central_run_attempt", 1), ("request_id", "other"), ("sdk", "node"),
                            ("selection", "published"), ("repository", "other/repo"), ("commit", "c" * 40),
                            ("package", ""), ("version", "latest"), ("artifact", {}),
-                           ("delivery_passed", False), ("restoration_verified", 1), ("lock_released", False)):
+                           ("delivery_passed", False), ("resources_destroyed", 1), ("cleanup_verified", False)):
             record = dict(self.report, **{key: value})
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 self.verify(*self.bundle(report=record))

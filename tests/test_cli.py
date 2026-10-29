@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CLITests(unittest.TestCase):
     def test_success_failure_and_transport_failure_have_safe_cli_results(self):
-        for conclusion, status, calls in (("success", 0, 2), ("failure", 1, 2), ("transport-error", 1, 1)):
+        for conclusion, status, calls in (("success", 0, 3), ("failure", 1, 2), ("transport-error", 1, 1)):
             with self.subTest(conclusion=conclusion), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 environment = dict(os.environ, PYTHONPATH=str(ROOT / "tests/fake_api"), GH_TOKEN="fixture-token",
@@ -24,7 +24,7 @@ class CLITests(unittest.TestCase):
                 self.assertEqual(result.returncode, status, result.stderr)
                 self.assertEqual(len((root / "calls").read_text().splitlines()), calls)
                 self.assertNotIn("fixture-token", result.stdout + result.stderr)
-                if calls == 2:
+                if calls >= 2:
                     self.assertIn("run-id=123", (root / "outputs").read_text())
                     self.assertIn("/actions/runs/123", (root / "summary").read_text())
                 else:

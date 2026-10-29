@@ -29,7 +29,7 @@ class InputTests(unittest.TestCase):
                 selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME=event))
                 self.assertEqual(selected["source_repository"], "rudderlabs/analytics-go")
                 self.assertEqual(selected["source_sha"], SHA)
-                self.assertEqual(selected["suite"], "reliability")
+                self.assertEqual(selected["suite"], "full")
                 self.assertNotIn("source_pr", selected)
 
     def test_pr_sends_merge_sha_and_pr_number(self):
@@ -160,6 +160,9 @@ class DispatchTests(unittest.TestCase):
         self.output = Path(temporary.name) / "output"
         self.summary = Path(temporary.name) / "summary"
         self.environment = {"GITHUB_OUTPUT": str(self.output), "GITHUB_STEP_SUMMARY": str(self.summary)}
+        self.result_patch = patch.object(dispatch.validation_result, "verified", return_value=({"commit": SHA}, ""))
+        self.result_patch.start()
+        self.addCleanup(self.result_patch.stop)
 
     def wait(self, responses, **kwargs):
         with patch.object(dispatch, "request", side_effect=responses) as request, \
@@ -189,7 +192,7 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[2].args[0], "/actions/runs/123")
         self.assertEqual(request.call_args_list[0].args[2],
                          {"ref": "main", "inputs": self.selected})
-        self.assertEqual(self.output.read_text(), f"run-id=123\nrun-url={url}\n")
+        self.assertTrue(self.output.read_text().startswith(f"run-id=123\nrun-url={url}\n"))
         self.assertIn(SHA, self.summary.read_text())
         self.assertIn(url, self.summary.read_text())
         self.assertNotIn("test-token", self.summary.read_text())

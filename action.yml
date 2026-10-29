@@ -6,8 +6,8 @@ inputs:
     description: GitHub App token with Actions write access to rudderlabs/rudder-sdk-e2e-tests.
     required: true
   suite:
-    description: reliability runs local delivery checks; full also runs live pipeline checks.
-    default: reliability
+    description: Full live delivery for the selected SDK through an isolated dev pipeline.
+    default: full
   package-version:
     description: Exact stable published SDK package version to validate.
   pr-number:
