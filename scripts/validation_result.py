@@ -28,6 +28,37 @@ IDENTITIES = {
     "rudderlabs/rudder-sdk-.net": ("dotnet", "RudderAnalytics"),
     "rudderlabs/rudder-sdk-java": ("java", "com.rudderstack.sdk.java.analytics:analytics"),
 }
+PUBLISHED_EVIDENCE = {
+    "node": {"npm_integrity": "sri512"},
+    "go": {"go_sum": "h1", "go_mod_sum": "h1", "checksum_database": "sumdb"},
+    "python": {"wheel_sha256": "sha256"},
+    "ruby": {"gem_sha256": "sha256"},
+    "ruby-sync": {"gem_sha256": "sha256"},
+    "rust": {"crate_sha256": "sha256"},
+    "php": {"composer_dist_reference": "commit", "composer_lock_sha256": "sha256"},
+    "dotnet": {"nuget_content_hash": "sha512"},
+    "java": {"maven_jar_sha1": "sha1"},
+}
+
+
+def valid_integrity(value, kind, commit):
+    if not isinstance(value, str):
+        return False
+    if kind in ("sha1", "sha256"):
+        return bool(re.fullmatch(r"[0-9a-f]{" + ("40" if kind == "sha1" else "64") + "}", value))
+    if kind == "commit":
+        return value == commit
+    if kind == "sumdb":
+        return value == "sum.golang.org"
+    prefix, length = {"h1": ("h1:", 32), "sri512": ("sha512-", 64), "sha512": ("", 64)}[kind]
+    if not value.startswith(prefix):
+        return False
+    encoded = value[len(prefix):]
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        return False
+    return len(decoded) == length and base64.b64encode(decoded).decode() == encoded
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -99,7 +130,9 @@ def identity(report, run, selected, sdk):
             or type(artifact) is not dict):
         raise ValueError("invalid SDK version or artifact evidence")
     if mode == "published":
-        if version != selected["package_version"].removeprefix("v") or not artifact:
+        if (version != selected["package_version"].removeprefix("v")
+                or not all(valid_integrity(artifact.get(field), kind, selected["source_sha"])
+                           for field, kind in PUBLISHED_EVIDENCE[sdk].items())):
             raise ValueError("published version or integrity mismatch")
     elif not isinstance(artifact.get("source_tree"), str) or not re.fullmatch(r"[0-9a-f]{40}", artifact["source_tree"]):
         raise ValueError("missing candidate source tree")

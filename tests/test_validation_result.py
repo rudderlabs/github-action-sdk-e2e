@@ -18,6 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import dispatch
 import validation_result as result
 
+SHA512 = base64.b64encode(bytes(64)).decode()
+H1 = "h1:" + base64.b64encode(bytes(32)).decode()
+PUBLISHED_EVIDENCE = {
+    "node": {"npm_integrity": "sha512-" + SHA512},
+    "go": {"go_sum": H1, "go_mod_sum": H1, "checksum_database": "sum.golang.org"},
+    "python": {"wheel_sha256": "c" * 64},
+    "ruby": {"gem_sha256": "c" * 64}, "ruby-sync": {"gem_sha256": "c" * 64},
+    "rust": {"crate_sha256": "c" * 64},
+    "php": {"composer_dist_reference": "a" * 40, "composer_lock_sha256": "c" * 64},
+    "dotnet": {"nuget_content_hash": SHA512}, "java": {"maven_jar_sha1": "c" * 40},
+}
+
 
 class BundleTests(unittest.TestCase):
     def setUp(self):
@@ -72,15 +84,30 @@ class BundleTests(unittest.TestCase):
 
     def test_all_published_results_use_the_same_contract_and_exact_version(self):
         self.selected["package_version"] = "v1.2.3"
-        self.report.update(selection="published", artifact={"native_checksum": "c" * 64})
+        self.report.update(selection="published")
         for repository, (sdk, package) in result.IDENTITIES.items():
             self.selected["source_repository"] = repository
-            self.report.update(sdk=sdk, package=package, repository=repository)
+            self.report.update(sdk=sdk, package=package, repository=repository, artifact=PUBLISHED_EVIDENCE[sdk])
             with self.subTest(sdk=sdk):
                 self.assertEqual(self.verify(*self.bundle()), (self.report, ""))
         self.report["version"] = "1.2.4"
         with self.assertRaises(RuntimeError):
             self.verify(*self.bundle())
+
+    def test_each_published_adapter_requires_its_recognized_integrity_fields(self):
+        self.selected["package_version"] = "1.2.3"
+        for repository, (sdk, package) in result.IDENTITIES.items():
+            self.selected["source_repository"] = repository
+            self.report.update(sdk=sdk, package=package, repository=repository, selection="published")
+            expected = PUBLISHED_EVIDENCE[sdk]
+            invalid = [{}, {"native_checksum": None}, {"unrelated": True}]
+            for field in expected:
+                invalid.append({key: value for key, value in expected.items() if key != field})
+                invalid.extend(dict(expected, **{field: value}) for value in (None, True, "", "malformed", "g" * 64))
+            for evidence in invalid:
+                self.report["artifact"] = evidence
+                with self.subTest(sdk=sdk, evidence=evidence), self.assertRaises(RuntimeError):
+                    self.verify(*self.bundle())
 
     def test_rejects_missing_duplicate_incomplete_expired_or_wrong_attempt_artifacts(self):
         good, data = self.bundle()
