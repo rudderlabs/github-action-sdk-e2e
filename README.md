@@ -181,8 +181,8 @@ job summary; failed reusable jobs may not deliver outputs. A retry never cancels
 a previous central run; inspect that run and its cleanup before retrying.
 
 The composite action above remains the entry point for source candidates. The
-reusable workflow pins the shared action, including the request identity fix, at
-`f097c19730d0768f34f9468b46b458e12c52fd11`. Central PR #32 provides published
+reusable workflow pins the merged shared result verifier at
+`b5370b94e03b098f67cafa3dc8871c52092507f2`. Central PR #32 provides published
 adapters and version selection; merged central PRs #33 and #35 provide shared
 isolation and validation results. Pin each SDK caller to the reviewed reusable
 workflow commit after this workflow merges. Record hosted delivery and cleanup
