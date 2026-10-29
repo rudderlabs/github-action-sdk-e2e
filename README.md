@@ -88,6 +88,7 @@ the default-branch push. Do not copy the release App key into Dependabot secrets
 | --- | --- | --- |
 | `token` | Required | Short-lived GitHub App token for central dispatch and polling. |
 | `suite` | `reliability` | `reliability` or `full`. |
+| `package-version` | Empty | Exact stable published version (`X.Y.Z` or `vX.Y.Z`). |
 | `pr-number` | Unset | Explicit PR number for a trusted caller; requires `merge-sha`. |
 | `merge-sha` | Unset | Explicit full lowercase current PR merge SHA; requires `pr-number`. |
 | `timeout-seconds` | `3000` | Wait budget from 1 to 3000 seconds. Set the caller job timeout higher. |
@@ -131,6 +132,33 @@ and verify repository rules before claiming enforcement. This action alone
 cannot gate npm publication or control upload order. Its current source-candidate
 adapters support Go and Node; other SDKs need central adapter support before
 using this action.
+
+## Published-package validation
+
+After the publishing job succeeds, call the action with `suite: full` and
+`package-version: ${{ needs.publish.outputs.version }}`. Export that version from
+the exact release commit used by the publishing job. The central workflow checks
+that the corresponding `vX.Y.Z` tag resolves to the event commit and belongs to
+the SDK's default-branch history. It installs the exact public registry package,
+checks its resolved version and integrity, then runs the existing delivery and
+cleanup checks. No SDK source package is substituted in this mode.
+
+Deploy central `package_version` support before adopting this input. Published
+adapters cover Go, Node, Python, Ruby, Ruby Sync, PHP, Rust, .NET and Java; each SDK
+still needs its own caller workflow. This interface alone does not enable those
+release workflows. PR events, ranges, prereleases and `latest` are rejected.
+
+Keep the pre-publication source check before publishing and the published-package
+check after publishing. For Go and PHP, creating the version tag starts
+publication, so a release-event check is already post-publication. Report release
+acceptance only after the published-package check passes. If acceptance fails,
+the package remains published.
+
+Retry only the failed validation job, or dispatch a validation-only workflow at
+the existing release tag with the same exact package version. Never rerun a
+successful publishing job merely to repeat E2E. Keep the shared action pinned to
+a reviewed full commit SHA in both paths. Candidate and published invocations
+use distinct request IDs, even within one caller run.
 
 The target is fixed to `server-sdk-validation.yml` on `main` in
 `rudderlabs/rudder-sdk-e2e-tests`. That workflow must be deployed before use.
