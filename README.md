@@ -10,7 +10,7 @@ Publishing an action on GitHub Marketplace is not required.
 
 ## Usage
 
-Run on a Linux runner with Bash and Python 3.9 or later. The action uses only the
+Run on a Linux runner with Bash and Python 3.9–3.14. The action uses only the
 Python standard library. No checkout of the SDK repository is required.
 
 Pin `rudderlabs/github-action-sdk-e2e` to a reviewed full commit SHA.
@@ -157,10 +157,25 @@ change branch protection or require release-please to wait for E2E.
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 -m pip install -r requirements-dev.txt
+python3 -m ruff check .
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+"$(go env GOPATH)/bin/actionlint" -shellcheck=
 ```
 
-Tests simulate the GitHub API and do not dispatch real workflows. CI also loads
-the composite action and verifies that missing credentials fail the step.
+Tests simulate the GitHub API and do not dispatch real workflows. CI checks each
+Python minor version from 3.9 through 3.14. Prefer a currently supported Python
+release for callers; the older versions are retained for compatibility.
+The CLI and composite tests cover success, propagated failure, retained outputs,
+missing credentials and transport-error redaction. All tests are credential-free.
+The required `test` check fails if any matrix or lint job fails or is skipped.
+Superseded local CI runs are cancelled; live central runs are never cancelled.
+
+PR titles use Conventional Commits with lowercase subjects. The organization
+title action skips bot authors, so reviewers must also check bot PR titles.
+CODEOWNERS requests SDK team review. Dependabot and pinact delay external action
+updates by seven days; internal `rudderlabs/*` actions are exempt. All action
+references remain pinned to full commit SHAs.
 
 ## Releasing this action
 
