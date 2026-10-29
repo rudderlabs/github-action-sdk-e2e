@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import dispatch
 
 SHA = "a" * 40
-RELEASE_SHA = "b" * 40
 ENVIRONMENT = {
     "GITHUB_REPOSITORY": "rudderlabs/analytics-go",
     "GITHUB_SHA": SHA,
@@ -126,67 +125,6 @@ class InputTests(unittest.TestCase):
         second = dispatch.inputs(dict(ENVIRONMENT, GITHUB_RUN_ATTEMPT="3"))
         self.assertNotEqual(first["request_id"], second["request_id"])
 
-    def test_published_version_uses_event_sha_for_all_sdk_callers(self):
-        repositories = ("rudder-sdk-ruby", "rudder-sdk-ruby-sync", "rudder-sdk-php",
-                        "rudder-sdk-rust", "analytics-go", "rudder-sdk-dotnet",
-                        "rudder-sdk-java", "rudder-sdk-node", "rudder-sdk-python")
-        for name in repositories:
-            with self.subTest(repository=name):
-                selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_REPOSITORY=f"rudderlabs/{name}",
-                                                GITHUB_EVENT_NAME="release", SDK_E2E_SUITE="full",
-                                                SDK_E2E_PACKAGE_VERSION="3.0.17"))
-                self.assertEqual(selected["source_sha"], SHA)
-                self.assertEqual(selected["package_version"], "3.0.17")
-                self.assertEqual(selected["suite"], "full")
-                self.assertNotIn("source_pr", selected)
-                self.assertEqual(selected["request_id"], f"{name}-42-2-{SHA}-package-3.0.17")
-
-    def test_published_retry_override_uses_release_sha_and_distinct_identity(self):
-        environment = dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
-                           SDK_E2E_PACKAGE_VERSION="3.0.17", SDK_E2E_SOURCE_SHA=RELEASE_SHA)
-        selected = dispatch.inputs(environment)
-        self.assertEqual(selected["source_sha"], RELEASE_SHA)
-        self.assertNotEqual(selected["source_sha"], SHA)
-        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
-            environment, SDK_E2E_PACKAGE_VERSION="3.0.18"))["request_id"])
-        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
-            environment, GITHUB_RUN_ATTEMPT="3"))["request_id"])
-        self.assertNotEqual(selected["request_id"], dispatch.inputs(dict(
-            ENVIRONMENT, GITHUB_SHA=RELEASE_SHA))["request_id"])
-
-    def test_invalid_published_requests_fail_before_dispatch(self):
-        valid = dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch", SDK_E2E_SUITE="full",
-                     SDK_E2E_PACKAGE_VERSION="3.0.17", GH_TOKEN="test-token")
-        cases = [
-            ({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/87/merge"}, "PR candidate"),
-            ({"GITHUB_EVENT_NAME": "pull_request_target", "GITHUB_REF": "refs/heads/main"}, "PR candidate"),
-            ({"GITHUB_REF": "refs/pull/87/merge"}, "PR candidate"),
-            ({"SDK_E2E_PR_NUMBER": "87", "SDK_E2E_MERGE_SHA": RELEASE_SHA}, "PR candidate"),
-            ({"SDK_E2E_PR_NUMBER": "87"}, "PR candidate"),
-            ({"SDK_E2E_MERGE_SHA": RELEASE_SHA}, "PR candidate"),
-            ({"SDK_E2E_SOURCE_SHA": "A" * 40}, "source-sha"),
-            ({"SDK_E2E_SOURCE_SHA": "b" * 39}, "source-sha"),
-            ({"SDK_E2E_SOURCE_SHA": "refs/tags/v3.0.17"}, "source-sha"),
-        ]
-        for version in ("latest", "^3.0.17", "3.0.x", "3.0.17 ", "3.0.17\n",
-                        "3.0.17; echo unsafe", "03.0.17", "3.0.17+local",
-                        "3.0.17-rc.1"):
-            cases.append(({"SDK_E2E_PACKAGE_VERSION": version}, "package-version"))
-        for changes, message in cases:
-            with self.subTest(changes=changes), patch.dict(os.environ, dict(valid, **changes), clear=True), \
-                    patch.object(dispatch, "dispatch_and_wait") as wait, \
-                    contextlib.redirect_stderr(io.StringIO()) as stderr:
-                self.assertEqual(dispatch.main(), 1)
-                self.assertIn(message, stderr.getvalue())
-                wait.assert_not_called()
-
-    def test_source_sha_override_requires_published_mode(self):
-        for event in ("push", "pull_request", "workflow_dispatch"):
-            with self.subTest(event=event), self.assertRaisesRegex(ValueError, "requires package-version"):
-                dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME=event,
-                                     GITHUB_REF="refs/pull/87/merge" if event == "pull_request" else "",
-                                     SDK_E2E_SOURCE_SHA=RELEASE_SHA))
-
 
 class RequestTests(unittest.TestCase):
     def test_dispatch_uses_versioned_api_and_json_body(self):
@@ -241,17 +179,6 @@ class DispatchTests(unittest.TestCase):
         self.assertIn(SHA, self.summary.read_text())
         self.assertIn(url, self.summary.read_text())
         self.assertNotIn("test-token", self.summary.read_text())
-
-    def test_published_dispatch_forwards_exact_version_and_release_sha(self):
-        self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",
-                                             SDK_E2E_PACKAGE_VERSION="3.0.17",
-                                             SDK_E2E_SOURCE_SHA=RELEASE_SHA, SDK_E2E_SUITE="full"))
-        self.run["display_title"] = f"sdk-e2e {self.selected['request_id']}"
-        _, request = self.wait([{"workflow_run_id": 123}, self.run])
-        self.assertEqual(request.call_args_list[0].args[2]["inputs"], self.selected)
-        self.assertEqual(self.selected["package_version"], "3.0.17")
-        self.assertEqual(self.selected["source_sha"], RELEASE_SHA)
-        self.assertNotIn("source_pr", self.selected)
 
     def test_explicit_candidate_dispatch_keeps_exact_run_identity_checks(self):
         self.selected = dispatch.inputs(dict(ENVIRONMENT, GITHUB_EVENT_NAME="workflow_dispatch",

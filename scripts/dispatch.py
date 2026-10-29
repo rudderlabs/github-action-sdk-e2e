@@ -7,8 +7,10 @@ import os
 import re
 import sys
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import validation_result
 
 REPOSITORY = "rudderlabs/rudder-sdk-e2e-tests"
 WORKFLOW = "server-sdk-validation.yml"
@@ -25,13 +27,15 @@ def request(path, token, payload=None):
             return json.loads(content) if content else {}
     except HTTPError as error:
         # Never print an API response that could include credentials or inputs.
-        raise RuntimeError(f"GitHub API request failed: HTTP {error.code}") from error
+        code = error.code
+        error.close()
+        raise RuntimeError(f"GitHub API request failed: HTTP {code}") from None
+    except (URLError, TimeoutError, ConnectionError):
+        raise RuntimeError("GitHub API request failed: transport error") from None
 
 
 def inputs(environment):
     repository = environment["GITHUB_REPOSITORY"]
-    version = environment.get("SDK_E2E_PACKAGE_VERSION", "")
-    override = environment.get("SDK_E2E_SOURCE_SHA", "")
     suite = environment.get("SDK_E2E_SUITE", "reliability")
     # The central runner owns the SDK allowlist and candidate authorization.
     if not re.fullmatch(r"rudderlabs/[A-Za-z0-9_.-]+", repository):
@@ -44,14 +48,6 @@ def inputs(environment):
 
     pr = environment.get("SDK_E2E_PR_NUMBER", "")
     merge_sha = environment.get("SDK_E2E_MERGE_SHA", "")
-    if version:
-        if not re.fullmatch(r"v?(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
-            raise ValueError("package-version must be an exact stable semantic version")
-        if (environment.get("GITHUB_EVENT_NAME") in ("pull_request", "pull_request_target")
-                or environment.get("GITHUB_REF", "").startswith("refs/pull/") or pr or merge_sha):
-            raise ValueError("published package validation cannot select a PR candidate")
-    elif override:
-        raise ValueError("source-sha override requires package-version")
     if bool(pr) != bool(merge_sha):
         raise ValueError("pr-number and merge-sha must be supplied together")
     if pr:
@@ -61,18 +57,23 @@ def inputs(environment):
             raise ValueError("merge-sha must be a full lowercase commit SHA")
         sha = merge_sha
     else:
-        sha = override or environment["GITHUB_SHA"]
+        sha = environment["GITHUB_SHA"]
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
-            field = "source-sha" if override else "GITHUB_SHA"
-            raise ValueError(f"{field} must be a full lowercase commit SHA")
+            raise ValueError("GITHUB_SHA must be a full lowercase commit SHA")
 
     correlation = f"{repository.split('/')[1]}-{run_id}-{attempt}-{sha}"
-    if version:
-        correlation += f"-package-{version}"
     selected = {"selection": "auto", "source_repository": repository, "source_sha": sha,
                 "suite": suite, "request_id": correlation}
+    version = environment.get("SDK_E2E_PACKAGE_VERSION", "")
     if version:
+        if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+            raise ValueError("package-version must be an exact stable version (X.Y.Z or vX.Y.Z)")
+        if (environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request")
+                or environment.get("GITHUB_REF", "").startswith("refs/pull/")
+                or pr or merge_sha):
+            raise ValueError("published-package validation cannot originate from a pull request")
         selected["package_version"] = version
+        selected["request_id"] += f"-published-{version}"
     if environment.get("GITHUB_EVENT_NAME") == "pull_request":
         match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
         if not match:
@@ -91,6 +92,7 @@ def inputs(environment):
                     or event["number"] != int(pr)):
                 raise ValueError("explicit PR candidate conflicts with the pull_request_target event PR number")
         selected["source_pr"] = pr
+    selected["request_id"] = selected["request_id"].replace(".", "_")
     return selected
 
 
@@ -132,6 +134,13 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
+            if selected["suite"] == "full" and not selected.get("source_pr"):
+                report, package = validation_result.verified(token, run, selected, request, API)
+                if os.environ.get("GITHUB_OUTPUT"):
+                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
+                        if package:
+                            output.write(f"package-file={package}\n")
             return url
         time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
     raise RuntimeError(f"timed out waiting for server SDK validation; central run may still be active: {url}")

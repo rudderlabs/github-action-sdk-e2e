@@ -10,8 +10,6 @@ inputs:
     default: reliability
   package-version:
     description: Exact stable published SDK package version to validate.
-  source-sha:
-    description: Optional full lowercase release commit SHA for published-package validation only; defaults to the event SHA.
   pr-number:
     description: Optional PR number for a trusted caller selecting an explicit PR candidate; requires merge-sha.
   merge-sha:
@@ -27,6 +25,15 @@ outputs:
   run-url:
     description: Link to the exact dispatched workflow run.
     value: ${{ steps.dispatch.outputs.run-url }}
+  report:
+    description: Verified shared SDK validation result JSON; available only after full non-PR validation.
+    value: ${{ steps.dispatch.outputs.report }}
+  validated-sha:
+    description: Commit recorded by the verified full validation result.
+    value: ${{ steps.dispatch.outputs.validated-sha }}
+  package-file:
+    description: Local path to the checksum-verified tested package when the result includes one.
+    value: ${{ steps.dispatch.outputs.package-file }}
 
 runs:
   using: composite
@@ -39,7 +46,6 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         SDK_E2E_SUITE: ${{ inputs.suite }}
         SDK_E2E_PACKAGE_VERSION: ${{ inputs.package-version }}
-        SDK_E2E_SOURCE_SHA: ${{ inputs.source-sha }}
         SDK_E2E_PR_NUMBER: ${{ inputs.pr-number }}
         SDK_E2E_MERGE_SHA: ${{ inputs.merge-sha }}
         SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}

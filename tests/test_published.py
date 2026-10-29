@@ -32,6 +32,9 @@ class PublishedDispatchTests(unittest.TestCase):
                 self.assertEqual(published["source_sha"], env["GITHUB_SHA"])
                 self.assertEqual(published["source_repository"], env["GITHUB_REPOSITORY"])
                 self.assertNotEqual(published["request_id"], candidate["request_id"])
+                self.assertRegex(published["request_id"], r"\A[a-zA-Z0-9_-]+\Z")
+                other = dispatch.inputs(dict(env, SDK_E2E_PACKAGE_VERSION="v1.2.4"))
+                self.assertNotEqual(published["request_id"], other["request_id"])
 
     def test_invalid_version_and_pr_events_fail_before_dispatch(self):
         invalid = [{"SDK_E2E_PACKAGE_VERSION": version} for version in
