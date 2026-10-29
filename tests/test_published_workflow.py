@@ -196,7 +196,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_app_token_and_published_dispatch_contract(self):
         guard = WORKFLOW.split("- name: Require exactly one release App identifier", 1)[1].split(
             "- name: Create a central validation token", 1)[0]
-        self.assertIn("rudderlabs/analytics-go", guard)
+        self.assertNotIn("GITHUB_REPOSITORY", guard)
         self.assertIn('"$APP_ID"', guard)
         self.assertIn('"$CLIENT_ID"', guard)
         self.assertIn("private-key: ${{ secrets.RELEASE_PRIVATE_KEY }}", WORKFLOW)
@@ -215,25 +215,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("SLACK", WORKFLOW.upper())
         self.assertNotIn("permission-contents: write", WORKFLOW)
 
-    def test_wrong_app_identifier_fails_before_token_creation(self):
+    def test_every_sdk_accepts_exactly_one_app_identifier_before_token_creation(self):
         import subprocess
 
         guard = WORKFLOW.split("- name: Require exactly one release App identifier", 1)[1].split(
             "- name: Create a central validation token", 1)[0].split("run: |\n", 1)[1]
-        for repository, client, app, success in (
-            ("rudderlabs/analytics-go", "", "123", True),
-            ("rudderlabs/analytics-go", "client", "", False),
-            ("rudderlabs/rudder-sdk-node", "client", "", True),
-            ("rudderlabs/rudder-sdk-node", "", "123", False),
-            ("rudderlabs/rudder-sdk-node", "client", "123", False),
-            ("rudderlabs/rudder-sdk-node", "", "", False),
-        ):
-            with self.subTest(repository=repository, client=client, app=app):
-                result = subprocess.run(["bash", "-e", "-c", textwrap.dedent(guard)],
-                                        env=dict(os.environ, GITHUB_REPOSITORY=repository,
-                                                 CLIENT_ID=client, APP_ID=app),
-                                        text=True, capture_output=True, check=False)
-                self.assertEqual(result.returncode == 0, success)
+        for repository in REPOSITORIES:
+            for client, app, success in (("client", "", True), ("", "123", True),
+                                         ("client", "123", False), ("", "", False)):
+                with self.subTest(repository=repository, client=client, app=app):
+                    result = subprocess.run(["bash", "-e", "-c", textwrap.dedent(guard)],
+                                            env=dict(os.environ, GITHUB_REPOSITORY=repository,
+                                                     CLIENT_ID=client, APP_ID=app),
+                                            text=True, capture_output=True, check=False)
+                    self.assertEqual(result.returncode == 0, success)
 
 
 if __name__ == "__main__":

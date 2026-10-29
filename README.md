@@ -10,7 +10,7 @@ Publishing an action on GitHub Marketplace is not required.
 
 ## Usage
 
-Run on a Linux runner with Bash and Python 3.9 or later. The action uses only the
+Run on a Linux runner with Bash and Python 3.9–3.14. The action uses only the
 Python standard library. No checkout of the SDK repository is required.
 
 Pin `rudderlabs/github-action-sdk-e2e` to a reviewed full commit SHA.
@@ -98,7 +98,9 @@ Pin the **reusable workflow** to a reviewed full commit SHA when it is merged;
 do not use `./.github/workflows/...` across repositories. The caller job must
 allow `contents: read` (the preflight reads the caller's release and tag), pass
 the existing release App secret explicitly, and use exactly one release App
-identifier. Go uses `vars.RELEASE_APP_ID`; the other eight callers use
+identifier. Use the identifier already configured in the SDK's release workflow.
+The shared workflow accepts either identifier for every approved SDK. Current Go
+callers use `vars.RELEASE_APP_ID`; the other eight callers use
 `vars.RELEASE_APP_CLIENT_ID`.
 
 In the SDK's existing `release: published` workflow, add this job under `jobs:`
@@ -166,10 +168,11 @@ a previous central run; inspect that run and its cleanup before retrying.
 The composite action above remains the entry point for source candidates. Its
 published `package-version` input comes from shared action PR #5; the central
 published adapters and version selection come from central PR #32. This reusable
-workflow requires both reviewed and available commits, as well as hosted
-acceptance of live delivery and cleanup, before the nine SDK caller workflows
-are migrated. The SHA shown in the reusable workflow is the shared action PR #5
-head and must be reviewed before adoption. No SDK callers are changed here.
+workflow requires both reviewed and available commits before the nine SDK caller
+workflows are migrated. Record hosted delivery and cleanup acceptance at each
+SDK's next normal release. The SHA shown in the reusable workflow is the shared action PR #5
+head and must be available on main before adoption. Refresh the pin after #5
+merges if the merge changes its commit SHA. No SDK callers are changed here.
 
 ## Interface
 
@@ -246,10 +249,25 @@ change branch protection or require release-please to wait for E2E.
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 -m pip install -r requirements-dev.txt
+python3 -m ruff check .
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+"$(go env GOPATH)/bin/actionlint" -shellcheck=
 ```
 
-Tests simulate the GitHub API and do not dispatch real workflows. CI also loads
-the composite action and verifies that missing credentials fail the step.
+Tests simulate the GitHub API and do not dispatch real workflows. CI checks each
+Python minor version from 3.9 through 3.14. Prefer a currently supported Python
+release for callers; the older versions are retained for compatibility.
+The CLI and composite tests cover success, propagated failure, retained outputs,
+missing credentials and transport-error redaction. All tests are credential-free.
+The required `test` check fails if any matrix or lint job fails or is skipped.
+Superseded local CI runs are cancelled; live central runs are never cancelled.
+
+PR titles use Conventional Commits with lowercase subjects. The organization
+title action skips bot authors, so reviewers must also check bot PR titles.
+CODEOWNERS requests SDK team review. Dependabot and pinact delay external action
+updates by seven days; internal `rudderlabs/*` actions are exempt. All action
+references remain pinned to full commit SHAs.
 
 ## License
 

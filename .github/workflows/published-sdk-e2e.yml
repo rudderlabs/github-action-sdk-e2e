@@ -8,10 +8,10 @@ on:
         required: true
         type: string
       release-app-client-id:
-        description: Release App Client ID (all callers except Go).
+        description: Release App Client ID. Supply exactly one App identifier.
         type: string
       release-app-id:
-        description: Existing numeric release App ID (Go only).
+        description: Numeric release App ID. Supply exactly one App identifier.
         type: string
     secrets:
       RELEASE_PRIVATE_KEY:
@@ -127,13 +127,8 @@ jobs:
           CLIENT_ID: ${{ inputs.release-app-client-id }}
           APP_ID: ${{ inputs.release-app-id }}
         run: |
-          if [[ "$GITHUB_REPOSITORY" == rudderlabs/analytics-go ]]; then
-            if [[ -z "$APP_ID" || -n "$CLIENT_ID" ]]; then
-              echo 'Go requires release-app-id only.' >&2
-              exit 1
-            fi
-          elif [[ -z "$CLIENT_ID" || -n "$APP_ID" ]]; then
-            echo 'Supply release-app-client-id only for this SDK.' >&2
+          if [[ -z "$CLIENT_ID" && -z "$APP_ID" ]] || [[ -n "$CLIENT_ID" && -n "$APP_ID" ]]; then
+            echo 'Supply exactly one of release-app-client-id or release-app-id.' >&2
             exit 1
           fi
       - name: Create a central validation token
@@ -151,7 +146,7 @@ jobs:
         id: e2e
         continue-on-error: true
         # SDK-5962 adds package-version; do not use ./ (that resolves in the SDK caller).
-        uses: rudderlabs/github-action-sdk-e2e@a9cd2cf5c53c2674082795246224bf7e510581e5 # SDK-5962 PR #5
+        uses: rudderlabs/github-action-sdk-e2e@7bbd09c860ec391978a6807e0b1f4f4747946177 # SDK-5962 PR #5; refresh after merge
         with:
           token: ${{ steps.token.outputs.token }}
           package-version: ${{ steps.preflight.outputs.version }}
