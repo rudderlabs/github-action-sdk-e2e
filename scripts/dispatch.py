@@ -30,18 +30,31 @@ def request(path, token, payload=None):
 
 def inputs(environment):
     repository = environment["GITHUB_REPOSITORY"]
-    sha = environment["GITHUB_SHA"]
     suite = environment.get("SDK_E2E_SUITE", "reliability")
     # The central runner owns the SDK allowlist and candidate authorization.
     if not re.fullmatch(r"rudderlabs/[A-Za-z0-9_.-]+", repository):
         raise ValueError("the caller must be a rudderlabs repository")
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError("GITHUB_SHA must be a full lowercase commit SHA")
     if suite not in ("reliability", "full"):
         raise ValueError("SDK_E2E_SUITE must be reliability or full")
     run_id, attempt = environment["GITHUB_RUN_ID"], environment["GITHUB_RUN_ATTEMPT"]
     if not run_id.isdigit() or not attempt.isdigit():
         raise ValueError("invalid caller run identity")
+
+    pr = environment.get("SDK_E2E_PR_NUMBER", "")
+    merge_sha = environment.get("SDK_E2E_MERGE_SHA", "")
+    if bool(pr) != bool(merge_sha):
+        raise ValueError("pr-number and merge-sha must be supplied together")
+    if pr:
+        if not re.fullmatch(r"[1-9][0-9]*", pr):
+            raise ValueError("pr-number must be a positive decimal PR number")
+        if not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+            raise ValueError("merge-sha must be a full lowercase commit SHA")
+        sha = merge_sha
+    else:
+        sha = environment["GITHUB_SHA"]
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("GITHUB_SHA must be a full lowercase commit SHA")
+
     correlation = f"{repository.split('/')[1]}-{run_id}-{attempt}-{sha}"
     selected = {"selection": "auto", "source_repository": repository, "source_sha": sha,
                 "suite": suite, "request_id": correlation}
@@ -49,7 +62,9 @@ def inputs(environment):
     if version:
         if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
             raise ValueError("package-version must be an exact stable version (X.Y.Z or vX.Y.Z)")
-        if environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request"):
+        if (environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request")
+                or environment.get("GITHUB_REF", "").startswith("refs/pull/")
+                or pr or merge_sha):
             raise ValueError("published-package validation cannot originate from a pull request")
         selected["package_version"] = version
         selected["request_id"] += f"-published-{version}"
@@ -57,7 +72,20 @@ def inputs(environment):
         match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
         if not match:
             raise ValueError("pull_request validation requires a PR merge ref")
+        if pr and (pr != match[1] or sha != environment.get("GITHUB_SHA")):
+            raise ValueError("explicit PR candidate conflicts with the pull_request merge ref or SHA")
         selected["source_pr"] = match[1]
+    elif pr:
+        if environment.get("GITHUB_EVENT_NAME") == "pull_request_target":
+            event_path = environment.get("GITHUB_EVENT_PATH")
+            if not event_path:
+                raise ValueError("pull_request_target validation requires an event payload")
+            with open(event_path, encoding="utf-8") as event_file:
+                event = json.load(event_file)
+            if (not isinstance(event, dict) or type(event.get("number")) is not int
+                    or event["number"] != int(pr)):
+                raise ValueError("explicit PR candidate conflicts with the pull_request_target event PR number")
+        selected["source_pr"] = pr
     return selected
 
 

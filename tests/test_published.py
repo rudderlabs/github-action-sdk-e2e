@@ -38,6 +38,8 @@ class PublishedDispatchTests(unittest.TestCase):
                    ("latest", "^1.2.3", "1.2", "01.2.3", "1.2.3\n", "1.2.3-beta", "1.2.3+build", "../1.2.3", "$(id)")]
         invalid += [{"SDK_E2E_PACKAGE_VERSION": "1.2.3", "GITHUB_EVENT_NAME": event}
                     for event in ("pull_request", "pull_request_target")]
+        invalid += [dict(SDK_E2E_PACKAGE_VERSION="1.2.3", GITHUB_REF="refs/pull/12/merge"),
+                    dict(SDK_E2E_PACKAGE_VERSION="1.2.3", SDK_E2E_PR_NUMBER="12", SDK_E2E_MERGE_SHA="a" * 40)]
         for extra in invalid:
             with self.subTest(extra=extra), patch.dict(os.environ, dict(ENV, GH_TOKEN="private-token", **extra), clear=True), \
                     patch.object(dispatch, "dispatch_and_wait") as wait, contextlib.redirect_stderr(io.StringIO()):
