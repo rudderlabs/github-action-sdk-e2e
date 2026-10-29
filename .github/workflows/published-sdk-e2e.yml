@@ -145,8 +145,8 @@ jobs:
       - name: Validate exact public package, delivery, and cleanup
         id: e2e
         continue-on-error: true
-        # SDK-5962 adds package-version; do not use ./ (that resolves in the SDK caller).
-        uses: rudderlabs/github-action-sdk-e2e@7bbd09c860ec391978a6807e0b1f4f4747946177 # SDK-5962 PR #5; refresh after merge
+        # Do not use ./ (that resolves in the SDK caller).
+        uses: rudderlabs/github-action-sdk-e2e@a60faa2d07b1fe88478011e5388e94b168d46c67 # reviewed main, PR #5
         with:
           token: ${{ steps.token.outputs.token }}
           package-version: ${{ steps.preflight.outputs.version }}
