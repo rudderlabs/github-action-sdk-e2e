@@ -90,6 +90,7 @@ def inputs(environment):
                     or event["number"] != int(pr)):
                 raise ValueError("explicit PR candidate conflicts with the pull_request_target event PR number")
         selected["source_pr"] = pr
+    selected["request_id"] = selected["request_id"].replace(".", "_")
     return selected
 
 
