@@ -146,7 +146,7 @@ jobs:
         id: e2e
         continue-on-error: true
         # Do not use ./ (that resolves in the SDK caller).
-        uses: rudderlabs/github-action-sdk-e2e@f097c19730d0768f34f9468b46b458e12c52fd11 # reviewed request identity fix
+        uses: rudderlabs/github-action-sdk-e2e@b5370b94e03b098f67cafa3dc8871c52092507f2 # reviewed shared result verifier, PR #9
         with:
           token: ${{ steps.token.outputs.token }}
           package-version: ${{ steps.preflight.outputs.version }}

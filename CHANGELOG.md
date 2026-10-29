@@ -9,7 +9,3 @@
 * **ci:** add reusable published SDK E2E validation workflow ([#8](https://github.com/rudderlabs/github-action-sdk-e2e/issues/8)) ([67e8af5](https://github.com/rudderlabs/github-action-sdk-e2e/commit/67e8af592ad821ac80522c4b0490e80efea29e77))
 * sdk-5962 expose published package validation ([#5](https://github.com/rudderlabs/github-action-sdk-e2e/issues/5)) ([a60faa2](https://github.com/rudderlabs/github-action-sdk-e2e/commit/a60faa2d07b1fe88478011e5388e94b168d46c67))
 * verify shared sdk validation results ([#9](https://github.com/rudderlabs/github-action-sdk-e2e/issues/9)) ([b5370b9](https://github.com/rudderlabs/github-action-sdk-e2e/commit/b5370b94e03b098f67cafa3dc8871c52092507f2))
-
-## Changelog
-
-Release Please records reviewed action releases here. No version has been released yet.
