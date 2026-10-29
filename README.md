@@ -123,9 +123,8 @@ validation retries:
 ```
 
 Create a separate `.github/workflows/retry-published-sdk-e2e.yml` for manual
-validation of an existing release. In the Run workflow UI, select that release's
-`vX.Y.Z` tag and enter the same exact version. This workflow has no publisher job
-or publishing credentials:
+validation of an existing release. This workflow has no publisher job or
+publishing credentials:
 
 ```yaml
 name: Retry published SDK E2E
@@ -151,6 +150,22 @@ jobs:
     secrets:
       RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
 ```
+
+The retry workflow must exist on the SDK's default branch and at the selected
+release tag. Use the CLI to dispatch that tag explicitly. Replace
+`SDK_REPOSITORY` and `X.Y.Z` with the SDK repository and existing release version:
+
+```sh
+gh workflow run retry-published-sdk-e2e.yml \
+  --repo rudderlabs/SDK_REPOSITORY \
+  --ref vX.Y.Z \
+  -f package-version=X.Y.Z
+```
+
+The tag and package version must identify the same release. The web UI's branch
+selector cannot select the required release tag. See GitHub's
+[manual workflow requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
+and the CLI's [tag ref option](https://cli.github.com/manual/gh_workflow_run).
 
 For Go, replace `release-app-client-id` in both jobs with
 `release-app-id: ${{ vars.RELEASE_APP_ID }}`. Keep publication and public-registry
