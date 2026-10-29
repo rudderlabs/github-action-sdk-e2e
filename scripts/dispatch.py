@@ -45,7 +45,7 @@ def inputs(environment):
     pr = environment.get("SDK_E2E_PR_NUMBER", "")
     merge_sha = environment.get("SDK_E2E_MERGE_SHA", "")
     if version:
-        if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+        if not re.fullmatch(r"v?(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
             raise ValueError("package-version must be an exact stable semantic version")
         if (environment.get("GITHUB_EVENT_NAME") in ("pull_request", "pull_request_target")
                 or environment.get("GITHUB_REF", "").startswith("refs/pull/") or pr or merge_sha):
@@ -123,6 +123,8 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
+            if selected.get("package_version"):
+                summary.write(f"\nMode: published package `{selected['package_version']}`\n")
     while time.monotonic() - started < timeout:
         run = request(f"/actions/runs/{run_id}", token)
         verified = validate_run(run, run_id, selected["request_id"],

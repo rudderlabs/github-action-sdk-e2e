@@ -169,7 +169,7 @@ class InputTests(unittest.TestCase):
             ({"SDK_E2E_SOURCE_SHA": "refs/tags/v3.0.17"}, "source-sha"),
         ]
         for version in ("latest", "^3.0.17", "3.0.x", "3.0.17 ", "3.0.17\n",
-                        "3.0.17; echo unsafe", "v3.0.17", "03.0.17", "3.0.17+local",
+                        "3.0.17; echo unsafe", "03.0.17", "3.0.17+local",
                         "3.0.17-rc.1"):
             cases.append(({"SDK_E2E_PACKAGE_VERSION": version}, "package-version"))
         for changes, message in cases:
