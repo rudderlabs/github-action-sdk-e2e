@@ -8,6 +8,8 @@ inputs:
   suite:
     description: reliability runs local delivery checks; full also runs live pipeline checks.
     default: reliability
+  package-version:
+    description: Exact stable published SDK package version to validate.
   pr-number:
     description: Optional PR number for a trusted caller selecting an explicit PR candidate; requires merge-sha.
   merge-sha:
@@ -24,11 +26,14 @@ outputs:
     description: Link to the exact dispatched workflow run.
     value: ${{ steps.dispatch.outputs.run-url }}
   report:
-    description: Verified Go candidate report JSON (schema v1); only for successful full non-PR Go runs.
+    description: Verified shared SDK validation result JSON; available only after full non-PR validation.
     value: ${{ steps.dispatch.outputs.report }}
   validated-sha:
-    description: Go candidate commit SHA from the verified full non-PR report; empty otherwise.
+    description: Commit recorded by the verified full validation result.
     value: ${{ steps.dispatch.outputs.validated-sha }}
+  package-file:
+    description: Local path to the checksum-verified tested package when the result includes one.
+    value: ${{ steps.dispatch.outputs.package-file }}
 
 runs:
   using: composite
@@ -40,6 +45,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.token }}
         SDK_E2E_SUITE: ${{ inputs.suite }}
+        SDK_E2E_PACKAGE_VERSION: ${{ inputs.package-version }}
         SDK_E2E_PR_NUMBER: ${{ inputs.pr-number }}
         SDK_E2E_MERGE_SHA: ${{ inputs.merge-sha }}
         SDK_E2E_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}

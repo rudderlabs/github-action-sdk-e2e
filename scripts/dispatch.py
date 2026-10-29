@@ -2,30 +2,19 @@
 """Dispatch the server SDK battery and propagate the exact run's conclusion."""
 from __future__ import annotations
 
-import hashlib
-import io
 import json
 import os
 import re
 import sys
 import time
-from urllib.error import HTTPError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
-import zipfile
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+import validation_result
 
 REPOSITORY = "rudderlabs/rudder-sdk-e2e-tests"
 WORKFLOW = "server-sdk-validation.yml"
 API = f"https://api.github.com/repos/{REPOSITORY}"
-REPORT_ARTIFACT = "go-release-result-{run_id}-{run_attempt}"
-REPORT_FILE = "release-result.json"
-GO_MODULE = "github.com/rudderlabs/analytics-go/v4"
-MAX_ARCHIVE_BYTES = 1024 * 1024
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        return None
 
 
 def request(path, token, payload=None):
@@ -38,90 +27,11 @@ def request(path, token, payload=None):
             return json.loads(content) if content else {}
     except HTTPError as error:
         # Never print an API response that could include credentials or inputs.
-        raise RuntimeError(f"GitHub API request failed: HTTP {error.code}") from error
-
-
-def download_artifact(artifact_id, token):
-    headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
-               "X-GitHub-Api-Version": "2026-03-10"}
-    opener = build_opener(NoRedirect)
-    path = f"/actions/artifacts/{artifact_id}/zip"
-    try:
-        try:
-            opener.open(Request(API + path, headers=headers), timeout=30)
-        except HTTPError as redirect:
-            try:
-                if redirect.code != 302:
-                    raise RuntimeError(f"GitHub API request failed: HTTP {redirect.code}") from redirect
-                location = redirect.headers.get("Location", "")
-            finally:
-                redirect.close()
-            target = urlsplit(location)
-            if target.scheme != "https" or not target.netloc or target.username or target.password or target.fragment:
-                raise RuntimeError("invalid artifact download redirect")
-            # GitHub's short-lived archive URL is outside the API; never send the App token there.
-            with opener.open(Request(location), timeout=30) as response:
-                content = response.read(MAX_ARCHIVE_BYTES + 1)
-                if len(content) > MAX_ARCHIVE_BYTES:
-                    raise RuntimeError("candidate report artifact is oversized")
-                return content
-        raise RuntimeError("artifact download did not redirect")
-    except HTTPError as error:
-        raise RuntimeError(f"artifact download failed: HTTP {error.code}") from error
-
-
-def verified_report(token, run, selected):
-    run_id = run["id"]
-    attempt = run.get("run_attempt")
-    if type(attempt) is not int or attempt <= 0:
-        raise RuntimeError("invalid central run attempt for candidate report")
-    name = REPORT_ARTIFACT.format(run_id=run_id, run_attempt=attempt)
-    listed = request(f"/actions/runs/{run_id}/artifacts?per_page=100", token)
-    if (type(listed) is not dict or type(listed.get("total_count")) is not int
-            or type(listed.get("artifacts")) is not list
-            or listed["total_count"] != len(listed["artifacts"])):
-        raise RuntimeError("candidate report artifact listing is incomplete")
-    matches = [artifact for artifact in listed["artifacts"]
-               if type(artifact) is dict and artifact.get("name") == name]
-    if len(matches) != 1:
-        raise RuntimeError("expected exactly one candidate report artifact on the validated run")
-    artifact = matches[0]
-    digest = artifact.get("digest")
-    if (type(artifact.get("id")) is not int or artifact["id"] <= 0
-            or artifact.get("expired") is not False
-            or type(artifact.get("size_in_bytes")) is not int
-            or not 0 < artifact["size_in_bytes"] <= MAX_ARCHIVE_BYTES
-            or type(digest) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)):
-        raise RuntimeError("invalid, expired or oversized candidate report artifact metadata")
-    archive = download_artifact(artifact["id"], token)
-    if hashlib.sha256(archive).hexdigest() != digest.removeprefix("sha256:"):
-        raise RuntimeError("candidate report artifact digest mismatch")
-    try:
-        with zipfile.ZipFile(io.BytesIO(archive)) as files:
-            if files.namelist() != [REPORT_FILE] or files.getinfo(REPORT_FILE).file_size > MAX_ARCHIVE_BYTES:
-                raise ValueError("invalid report archive contents")
-            with files.open(REPORT_FILE) as data:
-                content = data.read(MAX_ARCHIVE_BYTES + 1)
-                if len(content) > MAX_ARCHIVE_BYTES:
-                    raise ValueError("oversized report JSON")
-                report = json.loads(content)
-    except (ValueError, OSError, zipfile.BadZipFile, RuntimeError) as error:
-        raise RuntimeError("malformed candidate report artifact") from error
-    if type(report) is not dict or type(report.get("schema_version")) is not int or report["schema_version"] != 1:
-        raise RuntimeError("unsupported candidate report schema")
-    expected = {"request_id": selected["request_id"], "central_run_id": run_id,
-                "central_run_attempt": attempt, "repository": selected["source_repository"],
-                "commit": selected["source_sha"], "module": GO_MODULE}
-    if (any(type(report.get(key)) is not type(value) or report[key] != value
-            for key, value in expected.items())
-            or type(report.get("source_tree")) is not str
-            or not re.fullmatch(r"[0-9a-f]{40}", report["source_tree"])
-            or type(report.get("version")) is not str
-            or not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?", report["version"])
-            or any(report.get(key) is not True for key in
-                   ("delivery_passed", "restoration_verified", "lock_released"))):
-        raise RuntimeError("candidate report identity or required results do not match this run")
-    return report
+        code = error.code
+        error.close()
+        raise RuntimeError(f"GitHub API request failed: HTTP {code}") from None
+    except (URLError, TimeoutError, ConnectionError):
+        raise RuntimeError("GitHub API request failed: transport error") from None
 
 
 def inputs(environment):
@@ -154,6 +64,16 @@ def inputs(environment):
     correlation = f"{repository.split('/')[1]}-{run_id}-{attempt}-{sha}"
     selected = {"selection": "auto", "source_repository": repository, "source_sha": sha,
                 "suite": suite, "request_id": correlation}
+    version = environment.get("SDK_E2E_PACKAGE_VERSION", "")
+    if version:
+        if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+            raise ValueError("package-version must be an exact stable version (X.Y.Z or vX.Y.Z)")
+        if (environment.get("GITHUB_EVENT_NAME", "").startswith("pull_request")
+                or environment.get("GITHUB_REF", "").startswith("refs/pull/")
+                or pr or merge_sha):
+            raise ValueError("published-package validation cannot originate from a pull request")
+        selected["package_version"] = version
+        selected["request_id"] += f"-published-{version}"
     if environment.get("GITHUB_EVENT_NAME") == "pull_request":
         match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
         if not match:
@@ -172,6 +92,7 @@ def inputs(environment):
                     or event["number"] != int(pr)):
                 raise ValueError("explicit PR candidate conflicts with the pull_request_target event PR number")
         selected["source_pr"] = pr
+    selected["request_id"] = selected["request_id"].replace(".", "_")
     return selected
 
 
@@ -204,6 +125,8 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
+            if selected.get("package_version"):
+                summary.write(f"\nMode: published package `{selected['package_version']}`\n")
     while time.monotonic() - started < timeout:
         run = request(f"/actions/runs/{run_id}", token)
         verified = validate_run(run, run_id, selected["request_id"],
@@ -211,13 +134,13 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
-            if (selected["source_repository"] == "rudderlabs/analytics-go"
-                    and selected["suite"] == "full" and not selected.get("source_pr")):
-                report = verified_report(token, run, selected)
+            if selected["suite"] == "full" and not selected.get("source_pr"):
+                report, package = validation_result.verified(token, run, selected, request, API)
                 if os.environ.get("GITHUB_OUTPUT"):
                     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\n")
-                        output.write(f"validated-sha={report['commit']}\n")
+                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
+                        if package:
+                            output.write(f"package-file={package}\n")
             return url
         time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
     raise RuntimeError(f"timed out waiting for server SDK validation; central run may still be active: {url}")
