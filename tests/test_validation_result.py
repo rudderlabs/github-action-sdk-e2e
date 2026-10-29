@@ -82,6 +82,19 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(Path(path).read_bytes(), data)
         self.assertEqual(Path(path).parent.stat().st_mode & 0o777, 0o700)
 
+    def test_full_pr_requires_matching_pr_identity_and_cannot_authorize_a_release(self):
+        self.selected["source_pr"] = "94"
+        with self.assertRaises(RuntimeError):
+            self.verify(*self.bundle())
+        self.report["source_pr"] = "95"
+        with self.assertRaises(RuntimeError):
+            self.verify(*self.bundle())
+        self.report["source_pr"] = "94"
+        self.assertEqual(self.verify(*self.bundle()), (self.report, ""))
+        del self.selected["source_pr"]
+        with self.assertRaises(RuntimeError):
+            self.verify(*self.bundle())
+
     def test_all_published_results_use_the_same_contract_and_exact_version(self):
         self.selected["package_version"] = "v1.2.3"
         self.report.update(selection="published")

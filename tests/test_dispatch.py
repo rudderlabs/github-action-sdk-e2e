@@ -167,6 +167,20 @@ class DispatchTests(unittest.TestCase):
             result = dispatch.dispatch_and_wait("test-token", self.selected, poll=0, **kwargs)
         return result, request
 
+    def test_full_pr_success_requires_verified_live_result(self):
+        self.selected.update(suite="full", source_pr="94")
+        record = {"commit": SHA, "source_pr": "94"}
+        with patch.object(dispatch.validation_result, "verified", return_value=(record, "")) as verify:
+            self.wait([{"workflow_run_id": 123}, self.run])
+            verify.assert_called_once()
+            self.assertEqual(verify.call_args.args[2], self.selected)
+            self.assertIn("validated-sha=" + SHA, self.output.read_text())
+        self.output.unlink()
+        with patch.object(dispatch.validation_result, "verified", side_effect=RuntimeError("bad live result")), \
+                self.assertRaisesRegex(RuntimeError, "bad live result"):
+            self.wait([{"workflow_run_id": 123}, self.run])
+        self.assertNotIn("validated-sha=", self.output.read_text())
+
     def test_waits_for_exact_run_and_exports_outputs(self):
         url, request = self.wait([{"workflow_run_id": 123},
                                   dict(self.run, status="in_progress"), self.run])

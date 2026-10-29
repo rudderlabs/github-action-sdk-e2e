@@ -134,7 +134,7 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
-            if selected["suite"] == "full" and not selected.get("source_pr"):
+            if selected["suite"] == "full":
                 report, package = validation_result.verified(token, run, selected, request, API)
                 if os.environ.get("GITHUB_OUTPUT"):
                     with open(os.environ["GITHUB_OUTPUT"], "a") as output:

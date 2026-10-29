@@ -26,7 +26,7 @@ outputs:
     description: Link to the exact dispatched workflow run.
     value: ${{ steps.dispatch.outputs.run-url }}
   report:
-    description: Verified shared SDK validation result JSON; available only after full non-PR validation.
+    description: Verified shared SDK validation result JSON; available only after full validation.
     value: ${{ steps.dispatch.outputs.report }}
   validated-sha:
     description: Commit recorded by the verified full validation result.

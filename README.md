@@ -23,9 +23,6 @@ on:
   pull_request:
     branches: [master]
     types: [opened, reopened, synchronize]
-  push:
-    branches: [master]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,11 +31,10 @@ jobs:
   validate:
     # Fork and Dependabot PRs cannot access the release App secret.
     if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-       github.actor != 'dependabot[bot]' &&
-       github.event.pull_request.user.login != 'dependabot[bot]')
-    runs-on: ubuntu-24.04
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
       - name: Harden the runner
@@ -59,7 +55,7 @@ jobs:
         uses: rudderlabs/github-action-sdk-e2e@ACTION_COMMIT_SHA
         with:
           token: ${{ steps.token.outputs.token }}
-          suite: ${{ github.event_name == 'pull_request' && 'reliability' || vars.SDK_E2E_SUITE || 'reliability' }}
+          suite: ${{ startsWith(github.head_ref, 'release-please--') && 'full' || 'reliability' }}
 ```
 
 Reuse the existing release App credentials already available to the SDK workflow.
@@ -73,14 +69,31 @@ Use the identifier configured by the repository's release workflow. Node uses
 Keep the private key in GitHub Secrets and pass only the generated token to this
 action. The caller's ordinary `GITHUB_TOKEN` cannot dispatch into the internal
 test repository.
-The workflow also supports release events; the action uses the event's commit SHA.
+The example runs full live E2E on Release Please PRs and local reliability checks
+on other eligible PRs. The branch prefix selects coverage, not trust: candidate
+code always runs in isolation. Do not check out or execute SDK candidate code in
+the caller job that holds App credentials. Fork and Dependabot PRs skip this job;
+do not copy the release App key into Dependabot secrets.
 
-Keep `SDK_E2E_SUITE` unset or set to `reliability` until live delivery and cleanup
-acceptance are complete. Then set it to `full` for automatic default-branch and
-release validation. The expression above keeps PR candidates on `reliability`.
-Full candidate validation requires a commit in the SDK's default-branch history.
-Fork and Dependabot PRs skip this privileged caller; merged changes still run on
-the default-branch push. Do not copy the release App key into Dependabot secrets.
+Full PR validation requires the central SDK-6012 implementation. It tests the
+current synthetic PR merge commit, sends through the real development pipeline,
+and requires verified delivery, restoration, and lock release. The SDK container
+receives only the dedicated dev source submission key and test identifiers;
+workspace/GitHub credentials remain outside. Treat that source key as visible
+to candidate code. The action verifies the result's PR number, commit and run.
+A PR result cannot be used as non-PR publication evidence.
+
+Require the caller's stable check and an up-to-date release branch before
+merging. Let the official Release Please action publish normally after merge;
+no custom version/changelog recovery or duplicate post-merge full gate is
+needed. Keep exact published-package acceptance separate. It checks the package
+consumers download, rather than promising identical bytes from a later rebuild.
+A failed release PR remains open while a separate fix is merged and Release
+Please refreshes the candidate. Do not cancel central live runs during cleanup.
+
+Rollout: central live-PR support → reviewed shared action pin → SDK caller and
+required-check configuration → recorded full live acceptance on the release PR.
+Credential-free action tests do not establish that live acceptance.
 
 ## Published package validation
 
@@ -203,7 +216,7 @@ acceptance at each SDK's next normal release. No SDK callers are changed here.
 | --- | --- |
 | `run-id` | ID returned by GitHub for this dispatch. |
 | `run-url` | Link to that run. Also written to the job summary. |
-| `report` | Verified shared validation result JSON after full, non-PR validation. |
+| `report` | Verified shared validation result JSON after full validation. |
 | `validated-sha` | Commit from the verified result. Check its selection before using it for publication. |
 | `package-file` | Local path to the verified tested package, when the adapter includes one. |
 
@@ -231,9 +244,9 @@ Explicit inputs are claims,
 not authorization: this action keeps the existing `selection: auto` central
 contract, which checks repository eligibility and verifies that the supplied
 SHA is the PR's **current merge SHA**. It never trusts a bot actor or branch
-prefix as proof. The trusted caller must re-fetch and compare the PR's current
-merge SHA after central validation succeeds; a changed PR invalidates the
-result. For the Node release gate, use a separate caller PR pinned to the
+prefix as proof. The central harness checks current PR merge parents before testing and again
+before recording success. A changed candidate invalidates the result. Strict
+up-to-date required checks also protect the interval between CI and merge. For the Node release gate, use a separate caller PR pinned to the
 reviewed full action commit and link it to this action change. Require a
 stable aggregate check for eligible PRs and define fork, Dependabot, and
 skipped-job behavior in that caller; review the required-check rule separately

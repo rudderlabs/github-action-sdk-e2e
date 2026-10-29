@@ -117,6 +117,10 @@ def identity(report, run, selected, sdk):
                 "package": package,
                 "selection": mode, "repository": selected["source_repository"], "commit": selected["source_sha"],
                 "central_run_id": run["id"], "central_run_attempt": run["run_attempt"]}
+    if selected.get("source_pr"):
+        expected["source_pr"] = selected["source_pr"]
+    elif isinstance(report, dict) and report.get("source_pr"):
+        raise ValueError("PR evidence cannot authorize non-PR validation")
     if (type(report) is not dict or any(type(report.get(key)) is not type(value) or report[key] != value
                                       for key, value in expected.items())
             or any(report.get(key) is not True for key in
@@ -140,8 +144,8 @@ def identity(report, run, selected, sdk):
 
 def verified(token, run, selected, request, api):
     """Trust only the exact successful run/attempt and its authenticated bundle."""
-    if selected.get("suite") != "full" or selected.get("source_pr"):
-        raise ValueError("SDK results require full non-PR validation")
+    if selected.get("suite") != "full":
+        raise ValueError("SDK results require full validation")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise RuntimeError("SDK results require a successful central run")
     run_id, attempt = run["id"], run.get("run_attempt")
