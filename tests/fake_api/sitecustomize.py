@@ -36,7 +36,7 @@ class ArtifactOpener:
     def open(self, request, timeout):
         if request.full_url.endswith("/actions/artifacts/1/zip"):
             assert request.get_header("Authorization") == "Bearer fixture-token"
-            raise HTTPError(request.full_url, 302, "redirect", {"Location": "https://fixture.invalid/bundle"}, None)
+            raise HTTPError(request.full_url, 302, "redirect", {"Location": "https://fixture.invalid/bundle"}, io.BytesIO())
         assert request.full_url == "https://fixture.invalid/bundle"
         assert request.get_header("Authorization") is None
         return io.BytesIO(bundle()[1])
