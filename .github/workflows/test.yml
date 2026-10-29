@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   python:
-    runs-on: ubuntu-latest
+    # Python 3.9 has no Ubuntu 26.04 build. See Actions run 40879279396.
+    runs-on: ${{ matrix.python == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     timeout-minutes: 5
     strategy:
       fail-fast: false
