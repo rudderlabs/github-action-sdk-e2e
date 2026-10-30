@@ -36,12 +36,12 @@ def request(path, token, payload=None):
 
 def inputs(environment):
     repository = environment["GITHUB_REPOSITORY"]
-    suite = environment.get("SDK_E2E_SUITE", "reliability")
+    suite = environment.get("SDK_E2E_SUITE", "full")
     # The central runner owns the SDK allowlist and candidate authorization.
     if not re.fullmatch(r"rudderlabs/[A-Za-z0-9_.-]+", repository):
         raise ValueError("the caller must be a rudderlabs repository")
-    if suite not in ("reliability", "full"):
-        raise ValueError("SDK_E2E_SUITE must be reliability or full")
+    if suite != "full":
+        raise ValueError("SDK_E2E_SUITE must be full; local harness checks are not exposed")
     run_id, attempt = environment["GITHUB_RUN_ID"], environment["GITHUB_RUN_ATTEMPT"]
     if not run_id.isdigit() or not attempt.isdigit():
         raise ValueError("invalid caller run identity")
@@ -134,13 +134,12 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
         if verified and run.get("status") == "completed":
             if run.get("conclusion") != "success":
                 raise RuntimeError(f"server SDK validation concluded {run.get('conclusion')}; see {url}")
-            if selected["suite"] == "full" and not selected.get("source_pr"):
-                report, package = validation_result.verified(token, run, selected, request, API)
-                if os.environ.get("GITHUB_OUTPUT"):
-                    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                        output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
-                        if package:
-                            output.write(f"package-file={package}\n")
+            report, package = validation_result.verified(token, run, selected, request, API)
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                    output.write(f"report={json.dumps(report, separators=(',', ':'))}\nvalidated-sha={report['commit']}\n")
+                    if package:
+                        output.write(f"package-file={package}\n")
             return url
         time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
     raise RuntimeError(f"timed out waiting for server SDK validation; central run may still be active: {url}")
