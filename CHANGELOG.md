@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/rudderlabs/github-action-sdk-e2e/compare/v1.0.0...v2.0.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* require full live delivery and owned resource cleanup ([#14](https://github.com/rudderlabs/github-action-sdk-e2e/issues/14))
+
+### Features
+
+* require full live delivery and owned resource cleanup ([#14](https://github.com/rudderlabs/github-action-sdk-e2e/issues/14)) ([2d1262f](https://github.com/rudderlabs/github-action-sdk-e2e/commit/2d1262f86e519195dc723a8d244a8ecc8bcedb21))
+
 ## 1.0.0 (2026-10-29)
 
 
