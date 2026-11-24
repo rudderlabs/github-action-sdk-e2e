@@ -229,6 +229,19 @@ class DispatchTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "does not match"):
                 self.wait([{"workflow_run_id": 123}, dict(self.run, **{field: value})])
 
+    def test_retries_only_the_exact_dispatched_run_on_initial_404(self):
+        missing = dispatch.GitHubAPIError(404)
+        _, request = self.wait([{"workflow_run_id": 123}, missing, missing, self.run])
+        paths = [call.args[0] for call in request.call_args_list]
+        self.assertEqual(paths, [f"/actions/workflows/{dispatch.WORKFLOW}/dispatches",
+                                 "/actions/runs/123", "/actions/runs/123", "/actions/runs/123"])
+
+    def test_persistent_or_late_404_fails(self):
+        missing = dispatch.GitHubAPIError(404)
+        for responses in ([missing] * 3, [dict(self.run, status="queued"), missing]):
+            with self.subTest(responses=responses), self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                self.wait([{"workflow_run_id": 123}, *responses])
+
     def test_waits_for_github_to_expand_the_initial_workflow_title(self):
         pending = dict(self.run, status="queued", conclusion=None,
                        display_title="Server SDK validation")

@@ -17,6 +17,12 @@ WORKFLOW = "server-sdk-validation.yml"
 API = f"https://api.github.com/repos/{REPOSITORY}"
 
 
+class GitHubAPIError(RuntimeError):
+    def __init__(self, status):
+        super().__init__(f"GitHub API request failed: HTTP {status}")
+        self.status = status
+
+
 def request(path, token, payload=None):
     body = json.dumps(payload).encode() if payload is not None else None
     headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}",
@@ -29,7 +35,7 @@ def request(path, token, payload=None):
         # Never print an API response that could include credentials or inputs.
         code = error.code
         error.close()
-        raise RuntimeError(f"GitHub API request failed: HTTP {code}") from None
+        raise GitHubAPIError(code) from None
     except (URLError, TimeoutError, ConnectionError):
         raise RuntimeError("GitHub API request failed: transport error") from None
 
@@ -127,8 +133,18 @@ def dispatch_and_wait(token, selected, timeout=3000, poll=15):
             summary.write(f"[Server SDK validation]({url})\n\nCommit: `{selected['source_sha']}`\n")
             if selected.get("package_version"):
                 summary.write(f"\nMode: published package `{selected['package_version']}`\n")
+    # A newly dispatched run can briefly return 404 before the first successful GET.
+    initial_lookup_retries = 2
     while time.monotonic() - started < timeout:
-        run = request(f"/actions/runs/{run_id}", token)
+        try:
+            run = request(f"/actions/runs/{run_id}", token)
+        except GitHubAPIError as error:
+            if error.status != 404 or initial_lookup_retries == 0:
+                raise
+            initial_lookup_retries -= 1
+            time.sleep(min(poll, max(0, timeout - (time.monotonic() - started))))
+            continue
+        initial_lookup_retries = 0
         verified = validate_run(run, run_id, selected["request_id"],
                                 allow_pending_title=time.monotonic() - started < 30)
         if verified and run.get("status") == "completed":
