@@ -146,7 +146,7 @@ jobs:
         id: e2e
         continue-on-error: true
         # Do not use ./ (that resolves in the SDK caller).
-        uses: rudderlabs/github-action-sdk-e2e@03d2745b775f86980072ed562b2e137cde9da968 # SDK-6013 ephemeral live-result verifier
+        uses: rudderlabs/github-action-sdk-e2e@911613613dc0f5a09ab013e9cb5667190b0af0ca # retry initial run lookup after dispatch (#21)
         with:
           token: ${{ steps.token.outputs.token }}
           package-version: ${{ steps.preflight.outputs.version }}
